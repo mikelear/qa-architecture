@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS metadata
+Thumbs.db
+ehthumbs.db
+
+# Local scratch
+*.tmp
+scratch/
