@@ -30,6 +30,7 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 @risk-assessor.md
 @renovate-hardening.md
 @build-plan.md
+@sessions.md
 @open-questions.md
 @diagrams.md
 
