@@ -56,6 +56,21 @@ Each session aims for **3-6 hours of focused work** producing a **testable, comm
 
 **Phase 2.5 total**: ~30-39 hours; calendar ~3 weeks (some sessions hard to parallelize).
 
+### Phase 2.7 — post-deploy regression detection + traffic forensics (~6 sessions)
+
+Adds `leartech-arrivals-observer` (Fat-Controller-equivalent K8s watcher) + `post-deploy-tests` quill + traffic-forensics on regression. See `arrivals-observer.md`.
+
+| # | Goal | Deliverable | Where commits land | Est |
+|---|---|---|---|---|
+| **2.7.1** | Repo skeleton + K8s watcher | Go service from template; ReplicaSet informer working against jx-staging in dev cluster; Redis lock for dedup; arrival doc written to GCS on event; tests | new repo: `mikelear/leartech-arrivals-observer` | 4-5h |
+| **2.7.2** | Test trigger + result polling | K8s Job dispatch via `end2end-ui` task pointed at staging URLs (parameterize PREVIEW_URL → STAGING_URL); result polling loop with newly-failed diff vs pre-merge | `leartech-arrivals-observer` + extension to `leartech-pipeline-catalog/tasks/end2end-ui/` | 4-5h |
+| **2.7.3** | Tempo client + traffic-forensics engine | Tempo span query via HTTP API; edge graph extraction; rule-based diff (new edges, rate shifts, error spikes); forensics JSON written to GCS | `leartech-arrivals-observer` + `leartech-go-common/tempo` (extract pattern) | 5-6h |
+| **2.7.4** | Slack alerter + integration | Direct Slack webhook (option 2); message template with forensics diff rendered; userMappings config from qa-management; @here fallback when author missing | `leartech-arrivals-observer` + `leartech-qa-management/notification-config.yaml` | 3-4h |
+| **2.7.5** | `post-deploy-tests` quill | Quill in leartech-gate; alert-only initially; integration tests; PR-comment rendering of post-deploy results | `leartech-gate` + `leartech-qa-management/gate-metadata/quills.yaml` | 2-3h |
+| **2.7.6** | Phase 2.7 retro + calibration | Forensics threshold tuning from first 30 regressions; `unpredicted_edge_rate` baselined; risk-assessor calibration loop documented | hub + `leartech-qa-management/risk-config.yaml` | 2h |
+
+**Phase 2.7 total**: ~20-25 hours; calendar ~3 weeks for one engineer; ~2 weeks parallelized.
+
 ### Phase 3 — strategic / conditional
 
 Each item is independent and gated on operational signal. **Don't pre-plan**; create a session when the trigger fires.
@@ -124,6 +139,22 @@ After Phase 1:
 ```
 
 **Parallel saving**: ~1.5 weeks off Phase 2.5 with two engineers.
+
+### Phase 2.7 dependency graph
+
+```
+   2.7.1 (K8s watcher skeleton) ─► 2.7.2 (test trigger) ─► 2.7.3 (forensics)
+                                                          ├─► 2.7.4 (Slack alerter, parallel to forensics finalisation)
+                                                          └─► 2.7.5 (gate quill, parallel)
+                                                                        └─► 2.7.6 (retro)
+```
+
+**Parallel streams**:
+- Stream A: 2.7.1 → 2.7.2 → 2.7.3 (critical path: watcher → trigger → forensics engine)
+- Stream B: 2.7.4 (Slack alerter — can start after 2.7.2 outputs are in GCS)
+- Stream C: 2.7.5 (gate quill — can start after 2.7.2 settles the result-store schema for post-deploy)
+
+**Parallel saving**: ~1 week off Phase 2.7 with two engineers.
 
 ### Mechanics — running multiple Claude Code sessions
 
@@ -284,6 +315,17 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 | 2.5.5 | ⏳ | not started | — |
 | 2.5.6 | ⏳ | not started | — |
 | 2.5.7 | ⏳ | not started | — |
+
+### Phase 2.7
+
+| # | Status | Note | Commit / PR |
+|---|---|---|---|
+| 2.7.1 | ⏳ | not started | — |
+| 2.7.2 | ⏳ | not started | — |
+| 2.7.3 | ⏳ | not started | — |
+| 2.7.4 | ⏳ | not started | — |
+| 2.7.5 | ⏳ | not started | — |
+| 2.7.6 | ⏳ | not started | — |
 
 ### Active sessions (live multi-session view)
 

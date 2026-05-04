@@ -113,6 +113,48 @@ Sits between Phase 2 and Phase 3 because it depends on Phase 2's `tempo-to-har` 
 - Production traffic ingestion (Tempo at staging only; production probes remain Phase 3)
 - Automatic merge based on risk score (developers still merge manually; risk informs **what's required**, not **whether to merge**)
 
+## Phase 2.7 — post-deploy regression detection + traffic forensics (~3 weeks)
+
+Adds `leartech-arrivals-observer` — the Fat-Controller-equivalent K8s ReplicaSet watcher that runs the same Playwright suite against staging-deployed versions, diffs results against pre-merge baselines, and on regression auto-triggers Tempo span diff (traffic forensics) for diagnostic context. See `arrivals-observer.md` for the full design.
+
+**Why this is more than the "synthetic prod probes" Phase 3 item I had originally**: re-reading mqube's porcupine source revealed that Fat Controller IS structurally upstream of the gate's data — without it, post-deploy results don't exist for the gate's testing quill to read. So an arrivals-observer is **load-bearing**, not optional, once we add a `post-deploy-tests` quill. See `findings/02-fat-controller.md` correction for detail.
+
+Sits after Phase 2.5 because it benefits from risk-assessor's predicted-impact data (used as input to traffic-forensics calibration: how often did forensics reveal edges static analysis missed?).
+
+### Deliverables
+
+| Item | Effort | Owner-fit |
+|---|---|---|
+| `leartech-arrivals-observer` skeleton — K8s ReplicaSet watcher (lifted from mqube-fat-controller); Redis distributed lock; arrival doc in GCS | 4 days | Platform |
+| Test trigger via K8s Job parameterized for staging URLs | 2 days | Platform |
+| Result polling + newly-failed diff vs pre-merge baseline | 1 day | Platform |
+| Tempo client (extract to `leartech-go-common/tempo`) | 1 day | Platform |
+| Traffic-forensics engine (Tempo span diff: edges, rates, errors) | 3 days | Platform |
+| Slack alerter (option 2 — direct webhook initially) | 1 day | Platform |
+| Slack message rendering with forensics diff | 1 day | Platform |
+| `post-deploy-tests` quill in leartech-gate (alert-only initially) | half day | Platform |
+| Helm chart, Tekton wiring, deploy to jx-staging | 1 day | Platform |
+| Documentation + runbook | 1 day | — |
+
+**Total**: ~15-16 person-days = ~3 weeks for one engineer; ~2 weeks parallelized across 2.
+
+### Validation criteria
+
+- [ ] arrivals-observer detects every ReplicaSet `Added` event in jx-staging (no silent misses)
+- [ ] Triggered test runs land in result-store at `results/v1/post-deploy/...` for every arrival
+- [ ] Newly-failed diff correctly distinguishes regressions from already-failing tests
+- [ ] Traffic-forensics produces edge diff + Slack-rendered output on regressions
+- [ ] `post-deploy-tests` quill reads correctly (alert-only initially)
+- [ ] Author lookup succeeds (no silent skips on missing userMappings — falls back to @here)
+- [ ] Calibration metric `unpredicted_edge_rate` baselined for first 30 regressions
+
+### Phase 2.7 explicitly does NOT include
+
+- Production observation (staging-only initially; production policy is a separate Phase 3 decision)
+- Blocking `post-deploy-tests` quill (alert-only first ~6-8 weeks; flip per-service after baseline)
+- Standalone `leartech-notification-service` (direct Slack webhook initially; refactor when second consumer needs Slack)
+- ML-driven forensics classifier (rule-based first; tunable thresholds in config)
+
 ## Phase 3 — strategic / conditional (~variable, only if needed)
 
 Adds richer traffic mapping (Pixie or Cilium+Hubble), Slack alerting, synthetic prod probes, future HAR consumers. **Each item is independent** — pull in only the ones that solve a real pain.
@@ -121,15 +163,16 @@ Adds richer traffic mapping (Pixie or Cilium+Hubble), Slack alerting, synthetic 
 
 | Item | Trigger to build | Effort |
 |---|---|---|
-| Pixie deploy + `pixie-to-har` exporter | Tempo coverage has measurable gaps | 1-2 weeks |
+| Pixie deploy + `pixie-to-har` exporter (also feeds traffic-forensics for kernel-level visibility) | Tempo coverage has measurable gaps in forensics output | 1-2 weeks |
 | Cilium CNI migration + Hubble exporter | Other reasons to swap CNI (network policy, mTLS) | months (treat as separate project) |
-| Slack-alert layer (mqube Fat Controller equivalent) | Team explicitly wants Slack signal in addition to PR check | 3 days |
-| Synthetic prod probes (Tekton CronJob hitting prod endpoints) | First production-only regression slips through Phase 1+2 | 1 week |
+| Production observation extension to arrivals-observer | After ~6-8 weeks staging operation; safe-test policy defined | 1 week |
+| Standalone `leartech-notification-service` | Second consumer needs Slack access (refactor from arrivals-observer's direct webhook) | 3 days |
 | Test-generation AI (HAR diff → propose Playwright tests) | Coverage-gap report shows persistent untested edges | 3 days |
 | Contract-derivation tool (HAR → Pact contracts) | Team adopts Pact-style contract testing | 1 week |
 | Security-replay (HAR + mutations) | DAST/security team wants automated fuzzing | 1-2 weeks |
 | Cronjob health quill (mqube's third quill) | Leartech grows cronjob-heavy services | 3 days |
 | Tenant gate (if leartech grows tenant orgs) | Multi-tenant deploy model emerges | 1-2 weeks |
+| ML-driven forensics classification | Rule-based forensics insufficient; ≥6 months labeled regression data accumulated | 2 weeks |
 
 ## Sequencing logic
 

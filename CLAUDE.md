@@ -28,6 +28,7 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 @gate.md
 @har-pipeline.md
 @risk-assessor.md
+@arrivals-observer.md
 @renovate-hardening.md
 @build-plan.md
 @sessions.md

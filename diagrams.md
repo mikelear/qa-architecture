@@ -1,6 +1,6 @@
 # Mermaid diagrams — QA architecture flows
 
-Visual reference for the leartech QA architecture. Four diagrams covering PR-time flow, promotion + gate flow, HAR pipeline, and Renovate. Each rendered with consistent styling so component types are visually distinguishable.
+Visual reference for the leartech QA architecture. Five diagrams covering PR-time flow, promotion + gate flow, HAR pipeline, post-deploy observation + traffic forensics, and Renovate. Each rendered with consistent styling so component types are visually distinguishable.
 
 ## Legend
 
@@ -413,9 +413,132 @@ flowchart TB
 
 ---
 
-## Diagram 4 — Renovate hardening (cross-cutting)
+## Diagram 4 — Post-deploy observation + traffic forensics (Phase 2.7)
 
-Renovate is its own thread that touches all three flows above.
+`leartech-arrivals-observer` watches K8s ReplicaSets in staging, runs the same Playwright suite that ran pre-merge, and on regression auto-triggers Tempo-based traffic forensics for diagnostic context. This is the Fat-Controller-equivalent. **Closes the "preview env ≠ staging" gap.**
+
+```mermaid
+flowchart TB
+    %% Phase 2.7 — post-deploy regression detection + traffic forensics
+    %% Closes the "preview env ≠ staging" gap that pre-merge testing alone cannot
+    %% Lifts mqube-fat-controller pattern with structural improvements
+
+    subgraph Trigger[Trigger source — K8s events]
+        K8sEvent[ReplicaSet Added event<br/>in jx-staging<br/>fired by JX bootjob]:::crd
+        Watcher[arrivals-observer watcher<br/>client-go informer<br/>+ Redis distributed lock]:::standalone
+    end
+
+    subgraph Observer[leartech-arrivals-observer - standalone Go service]
+        ObsBin[arrivals-observer<br/>Long-running Deployment<br/>port 8080 - API + watcher]:::standalone
+        ArrivalDoc[(Arrival doc written<br/>GCS arrivals/v1/<br/>repo/SHA/env)]:::storage
+        TrigJob[Trigger K8s Job<br/>end2end-ui task<br/>STAGING_URL parameter]:::tektonTask
+        Poll[Result polling loop<br/>per-test retry 1<br/>20min timeout]:::tektonTask
+        Diff[Newly-failed diff<br/>vs pre-merge baseline]:::tektonTask
+    end
+
+    subgraph PreMergeRef[Pre-merge baseline]
+        PreMergeResults[(GCS results/v1/<br/>SHA-keyed pre-merge<br/>shift-left + contract)]:::storage
+    end
+
+    subgraph PostDeployStore[Post-deploy storage]
+        PostResults[(GCS results/v1/<br/>post-deploy/<br/>SHA-keyed staging tests)]:::storage
+    end
+
+    subgraph Forensics[Traffic forensics on regression]
+        Tempo[(Tempo<br/>OTel spans<br/>jx-observability)]:::storage
+        ForensicsBin[forensics engine<br/>Tempo span query<br/>edge graph diff]:::tektonTask
+        DiffOutput[(GCS forensics/v1/<br/>diff JSON<br/>new edges - rate shifts)]:::storage
+    end
+
+    subgraph Alerting[Slack alerter]
+        SlackBuilder[Slack message builder<br/>with forensics rendering]:::tektonTask
+        UserMappings[(GitHub to Slack ID<br/>from qa-management)]:::storage
+        SlackAPI[Slack webhook<br/>direct POST<br/>or notification-service]:::standalone
+        SlackPost([Slack alert in channel<br/>with @-mention or @here<br/>full forensics diff]):::pr
+    end
+
+    subgraph GateConsumer[leartech-gate consumer Phase 2.7]
+        GatePR([Promotion PR<br/>opens against<br/>GitOps repo]):::pr
+        PostQuill[post-deploy-tests quill<br/>Phase 2.7<br/>alert-only initially<br/>blocking after baseline]:::tektonTask
+        QuillVerdict{Pass / Alert / Fail}
+    end
+
+    subgraph QAMgmt4[leartech-qa-management]
+        QM_Notif[notification-config.yaml<br/>userMappings]:::repo
+        QM_Forensics[forensics-config.yaml<br/>thresholds]:::repo
+        QM_Quill[gate-metadata/quills.yaml<br/>post-deploy-tests entry]:::repo
+        QM_RegLog[regression-log<br/>append-only]:::repo
+    end
+
+    subgraph CalibrationLoop[Calibration feedback loop into risk-assessor]
+        UnpredictedEdge[Calibration metric<br/>unpredicted_edge_rate<br/>forensics edges not<br/>in static prediction set]:::tektonTask
+        RiskCfg[risk-config.yaml<br/>thresholds tuned<br/>quarterly retros]:::repo
+    end
+
+    %% Watcher fires
+    K8sEvent --> Watcher
+    Watcher --> ObsBin
+    ObsBin --> ArrivalDoc
+    ObsBin --> TrigJob
+
+    %% Test runs
+    TrigJob -->|"runs against<br/>staging URLs"| Poll
+    Poll --> PostResults
+    Poll --> Diff
+    PreMergeResults -.->|"compare against"| Diff
+
+    %% Diff outcome
+    Diff -->|"no regression"| ObsBin
+    Diff -->|"REGRESSION detected"| ForensicsBin
+
+    %% Forensics
+    Tempo -->|"v_new window spans"| ForensicsBin
+    Tempo -->|"v_old last good window"| ForensicsBin
+    QM_Forensics -->|"thresholds"| ForensicsBin
+    ForensicsBin --> DiffOutput
+    ForensicsBin --> SlackBuilder
+
+    %% Slack
+    QM_Notif -->|"userMappings"| SlackBuilder
+    SlackBuilder --> SlackAPI
+    SlackAPI --> SlackPost
+    DiffOutput -.->|"link in alert"| SlackPost
+
+    %% Regression log
+    Diff --> QM_RegLog
+
+    %% Gate consumes
+    GatePR --> PostQuill
+    QM_Quill -->|"alert-only or blocking"| PostQuill
+    PostResults -->|"verdicts by SHA"| PostQuill
+    PostQuill --> QuillVerdict
+
+    %% Calibration loop
+    DiffOutput -->|"compare to static<br/>prediction"| UnpredictedEdge
+    UnpredictedEdge -.->|"if rate above 20%<br/>tune"| RiskCfg
+
+    classDef repo fill:#e2e3e5,stroke:#383d41,stroke-width:2px
+    classDef standalone fill:#d4edda,stroke:#155724,stroke-width:2px
+    classDef tektonTask fill:#cce5ff,stroke:#004085,stroke-width:2px
+    classDef crd fill:#d1ecf1,stroke:#0c5460,stroke-width:2px,stroke-dasharray:5
+    classDef trainedModel fill:#fff3cd,stroke:#856404,stroke-width:3px
+    classDef storage fill:#f8d7da,stroke:#721c24,stroke-width:2px
+    classDef pr fill:#ffeeba,stroke:#856404,stroke-width:2px
+```
+
+### Notes on Diagram 4 (post-deploy)
+
+- **Lifted directly from `mqube-fat-controller`'s pattern** for the K8s watcher + dispatch + polling logic. ~60-70% code reuse possible.
+- **Traffic-forensics is new vs mqube** — they alert "test failed" without diagnostic; we render the network-behavior diff directly into the Slack alert.
+- **The calibration loop (bottom subgraph)** is the closing of the architectural circle: arrivals-observer's forensics output reveals edges risk-assessor's static analysis missed → tunes risk-config.yaml → risk-assessor improves over time. **System gets smarter via operational feedback.**
+- **Three timeframes, three observers, one data model**: risk-assessor (PR-time, predictive), gate (promotion-time, gating), arrivals-observer (post-deploy-time, regression-detective). All write to the same GCS result-store with consistent schemas.
+- **`post-deploy-tests` quill is alert-only initially** — emits PR comment but doesn't fail the gate check. Flipped to blocking per-service after 6-8 weeks of calibration.
+
+---
+
+## Diagram 5 — Renovate hardening (cross-cutting)
+
+Renovate is its own thread that touches all four flows above.
 
 ```mermaid
 flowchart LR
@@ -474,7 +597,7 @@ For asking follow-ups about deployment shape:
 
 ---
 
-## Five things worth digging into
+## Six things worth digging into
 
 Anchor points for follow-up questions:
 
@@ -487,6 +610,8 @@ Anchor points for follow-up questions:
 4. **Trained-model usage** appears in three boxes (yellow). Worth deciding whether risk-assessor stays rule-based or learns from override patterns over time — Q22 in `open-questions.md`.
 
 5. **Tempo as both source and sink** (Diagram 3) — load-testing both reads Tempo (via tempo-to-har) and writes Tempo (during replay). Could create a feedback loop if not careful — load-test traffic gets re-ingested as "real traffic" for next replay generation. Worth a guard.
+
+6. **The calibration feedback loop** (Diagram 4 bottom subgraph) — arrivals-observer's traffic-forensics output feeds back into risk-assessor's tuning over time. **`unpredicted_edge_rate`** is the metric that closes the loop: when forensics consistently reveals edges static analysis missed, that's a signal to update `service-catalog.yaml` or `risk-config.yaml` rules. Worth deciding the cadence of the calibration retro (quarterly? after every N regressions?).
 
 ---
 

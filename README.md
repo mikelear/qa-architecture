@@ -106,6 +106,7 @@ HAR pipeline (load testing + future consumers):
 | `leartech-load-testing` (Go service) | HAR replay engine. SLA-asserted. Triggered by CronJob + Tekton step | **Lift mqube-load-testing chart pattern**; ~3 days + 2 days for SLA quill |
 | `tempo-to-har` (Go service) | Phase 2 — synthesizes HAR from Tempo spans for coverage-gap + risk-assessor input | **Build** — ~3 days (uses Tempo's HTTP API + Go templates) |
 | `leartech-risk-assessor` (Tekton task + Go service) | Phase 2.5 — classifies PR risk via static (AST) + Tempo + HAR signals; modifies required-tests | **Build** — ~3 weeks; see `risk-assessor.md` |
+| `leartech-arrivals-observer` (Standalone Go service) | Phase 2.7 — Fat-Controller-equivalent K8s ReplicaSet watcher; runs Playwright against staging-deployed versions; auto-triggers traffic-forensics (Tempo span diff) on regression; produces data the `post-deploy-tests` quill reads | **Lift mqube-fat-controller pattern** — ~3 weeks; see `arrivals-observer.md` |
 | Repo-type policy (in qa-management) | `repo-type-policy/test-packs.yaml` — base required packs + risk_modifiers per repo type | **Build** — half-day (YAML schema in qa-management) |
 | Renovate full-QA harness | Renovate PRs run full Playwright suite, not just unit tests | **Configure** — ~half day (Renovate + Lighthouse trigger) |
 | AI-suggested PR-to-management | Companion-PR opener fed by code-reviewer | **Reuse** — leartech-ai-classifier already running; ~2-3 days for the bridge |
@@ -120,9 +121,19 @@ HAR pipeline (load testing + future consumers):
 
 ## What this gives up vs. mqube
 
-- **Per-version post-deploy signal** — leartech-gate reads PR-time results, not deployment-time. If a regression only manifests in real cluster conditions (network, secrets, scaled load), shift-left tests miss it. Mitigation: synthetic prod probes (Tekton CronJob hitting prod endpoints; results to result-store).
-- **Slack-alert culture** — Fat Controller's main visible output. Not built here; can be added later as a thin notifier reading the result-store.
+- **Production observation** — staging-only initially (matching mqube's actual posture; Fat Controller isn't deployed in production either). Phase 3 decision once staging operation is stable.
 - **Cronjob health gating** — porcupine's third quill. Worth re-considering only if leartech grows cronjob-heavy services (currently doesn't).
+
+## What this adds vs. mqube
+
+- **Single source of truth** — qa-management as the canonical config repo; consumers pull via Renovate-pinned tags. Solves mqube's three-place test-list drift (their N6 from `Qa-Analysis/findings/05-open-questions.md`).
+- **PR-time gating with companion-PR coverage proposals** — caught before merge with author context. Mqube only catches at the production-promotion-PR.
+- **Risk-based gating with AST primary + traces confirming** (Phase 2.5) — they uniformly gate; we scale required-tests by risk.
+- **Multi-producer HAR pipeline** — Playwright + Tempo + future producers feed one engine. Mqube is tied to Playwright as sole source.
+- **Traffic-forensics on regression** (Phase 2.7) — when arrivals-observer detects a regression, automatically diffs Tempo span graph between version windows. Explains what changed at the network level. Mqube alerts "test failed" without diagnostic context.
+- **Renovate hardening** — full Playwright on dep-update PRs; load-bearing-dep human review. Mqube doesn't have this.
+- **No silent missing-userMapping skip** — fallback to @here when author isn't mapped. Mqube silently skips alerts.
+- **Calibration feedback loop** — risk-assessor's static rules improve over time from arrivals-observer's forensics output (Phase 2.5 ↔ 2.7).
 
 ## Foundation leverage
 
@@ -145,7 +156,8 @@ See `build-plan.md` for detail. Headline:
 - **Phase 1** (~2 weeks): qa-management repo + leartech-gate + shift-left-tests quill + result-store (extends existing GCS bucket — ~2 hours, not 1 day). Closed loop.
 - **Phase 2** (~2 weeks): Tempo-to-HAR + load-testing service + load-sla quill + Renovate hardening + AI coverage suggester.
 - **Phase 2.5** (~3 weeks): risk-assessor — static analysis primary + Tempo/HAR confirming; risk-modifier extension to required test packs; gate override-stiffening on high-risk PRs.
-- **Phase 3** (later, only if needed): Pixie or Hubble for traffic mapping; synthetic prod probes; Slack-alert layer.
+- **Phase 2.7** (~3 weeks): arrivals-observer (Fat-Controller-equivalent) + traffic-forensics on regression + `post-deploy-tests` quill. Closes the "preview env ≠ staging" gap that pre-merge testing alone cannot.
+- **Phase 3** (later, only if needed): Pixie/Hubble for traffic-forensics broader coverage; production observation; Slack-notification-service refactor; test-gen AI; contract derivation; security replay.
 
 ## Open decisions
 

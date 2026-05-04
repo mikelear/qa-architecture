@@ -263,6 +263,12 @@ The result lands in result-store; the `load-sla` quill in leartech-gate reads it
 
 The HAR pipeline + Tempo→HAR producers feed `leartech-risk-assessor` as **confirming signals** for risk classification. See `risk-assessor.md` for the full design — HAR endpoint extraction + Tempo span breadth become two of the inputs that distinguish "PR's preview just ran narrow tests" from "PR genuinely has narrow scope". This is the most concrete near-term consumer beyond load testing.
 
+### Traffic-forensics on regression (Phase 2.7)
+
+`leartech-arrivals-observer` reads Tempo directly (not HAR) for forensics — querying spans in the regressing version's deployment window and the prior good version's window, computing a network-behavior diff. So it's a **Tempo consumer**, not a HAR consumer. See `arrivals-observer.md`.
+
+The HAR pipeline is parallel infrastructure that handles the **request-shape interchange format** (load testing, replay, contract derivation); traffic-forensics handles the **network-behavior change detection** (regression diagnosis). Both sit on top of Tempo, but use it for different purposes.
+
 ### Test-generation AI
 
 ```

@@ -203,8 +203,57 @@ Does a PR's risk vary by cluster (gcp vs az), or is it cluster-agnostic?
 
 **Decision needed**: platform team owns; quarterly retrospective. Confirm with the team.
 
+## Arrivals-observer (Phase 2.7)
+
+### Q-AO1. Mongo or GCS for arrival docs?
+
+**Proposal**: GCS (consistency with result-store).
+
+- **GCS**: same bucket pattern as result-store; cheap; lifecycle policy auto-expires; reuses Go writer helper
+- **Mongo**: matches mqube exactly; richer query for dashboards
+
+**Decision needed**: lean GCS; switch to Mongo only if dashboards demand it (then add a thin indexer like result-store's).
+
+### Q-AO2. Forensics artifact retention
+
+**Proposal**: 90 days like result-store; longer for "interesting" regressions (e.g. ones that led to an incident).
+
+**Decision needed**: confirm; security/compliance review may want longer for audit trail.
+
+### Q-AO3. When to flip `post-deploy-tests` quill from alert-only to blocking?
+
+**Proposal**: per-service flip after 6-8 weeks of stable operation; metric-based (override rate <X%, false-positive rate <Y%).
+
+**Decision needed**: define X, Y thresholds. Initial guess: override-rate <15%, false-positive rate <10%.
+
+### Q-AO4. Production observation policy — when, what tests are safe?
+
+Defer to Phase 3 design pass. Initial outline:
+
+- Read-only / idempotent tests only
+- Test data quarantine (no creation, or auto-cleanup)
+- PII handling per data-handling policy
+- Rate limits on test invocation
+- Auth scoping with tight credentials
+- Specific service-by-service approval
+
+**Decision needed**: separate design doc in Phase 3 if/when triggered.
+
+### Q-AO5. Should arrivals-observer emit regression-log as a structured PR to qa-management?
+
+**Proposal**: yes — auto-merge for `add-only` (matches coverage-scanner pattern); manual review for any policy change.
+
+**Decision needed**: confirm + format for the regression-log entries.
+
+### Q-AO6. Production-coverage policy if/when expanding
+
+When extending arrivals-observer to production: which test packs run vs which are staging-only? Some Playwright tests are inherently staging (test-data assumptions, broker/admin flows that mutate state) and unsafe in prod.
+
+**Decision needed**: gating mechanism in `required-tests/<service>.yaml` — per-test flag like `prod_safe: true` or `envs: [staging]`.
+
 ## Resolution log
 
 | Q# | Decision | Date | Where it lives now |
 |---|---|---|---|
 | Q1 | GCS — existing `test-artifacts-product-first` bucket extended with `results/v1/` prefix | 2026-04-30 | `gate.md` "Result store contract" + this file under Q1 |
+| Q-FC | Fat Controller IS load-bearing for the gate (was wrong in earlier framing) | 2026-05-04 | `~/leartech/Qa-Analysis/findings/02-fat-controller.md` "CORRECTION" + `arrivals-observer.md` |

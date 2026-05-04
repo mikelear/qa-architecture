@@ -370,6 +370,35 @@ Even a `low` risk doesn't justify auto-merge of arbitrary PRs. Risk scoring info
 
 `risk_level: medium` is fine. `risk_score: 0.847` is not — it implies precision the model doesn't have. Bucketed levels with rationale > continuous scores. Easier for humans to act on.
 
+## Calibration feedback loop with arrivals-observer (Phase 2.7)
+
+A subtle but valuable closing of the architectural loop: when `leartech-arrivals-observer` (Phase 2.7) detects a regression, its traffic-forensics output reveals which **service-edges actually changed** between the regressing version and the prior good version. Comparing those revealed edges against risk-assessor's static prediction set surfaces blind spots in the static analysis.
+
+```
+Risk-assessor at PR-time predicted: PR affects A, B, C
+Arrivals-observer at deploy-time detects: regression in B's tests
+Traffic-forensics on the regression: edge A → notification-service appeared,
+                                     notification-service was NOT in static prediction
+                                     → risk-assessor missed an edge
+```
+
+Track as `unpredicted_edge_rate` metric in Phase 2.7 retros:
+
+```
+unpredicted_edge_rate = forensics-revealed-edges-not-in-static-prediction / total-regressions
+```
+
+If consistently >20%, risk-assessor's static rules need improvement. Common causes:
+
+- **Shared config repo effects under-modeled** — a config change reaches more services than the AST shows (rule-engine consumers, message-bus subscribers)
+- **Dynamic dispatch / reflection / DI** — Go interfaces, dependency injection, generated client code; static walk doesn't follow these
+- **Generated code consumers** — AST sees generation source but not the generated callers (OpenAPI clients, protobuf, etc.)
+- **Message-bus / event-driven decoupling** — event publisher's static deps don't reach subscribers
+
+Each pattern, once identified, becomes a new rule in `service-catalog.yaml` (e.g. mark a service as a transitive consumer of a shared config) or `risk-config.yaml` (e.g. raise risk weight when a known-tricky shared dep changes). **The system gets smarter via operational feedback** rather than via hand-tuning every quarter.
+
+This closes a real gap: static analysis fundamentally can't see what runtime behavior reveals; the loop lets it learn.
+
 ## Open decisions
 
 See `open-questions.md`. Risk-assessor-specific:

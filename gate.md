@@ -179,6 +179,45 @@ Approver-required overrides on blocking quills require a separate `/approve over
 
 **Risk-driven override stiffening** — when `risk-assessor` returns `risk_level: high` for the SHA, the gate reads `override_policy` from the assessment and elevates approval requirements automatically. See `risk-assessor.md` for the schema. Stops developers from `/override`-ing high-risk PRs without a second pair of eyes; doesn't penalize trivial PRs.
 
+## `post-deploy-tests` quill (Phase 2.7)
+
+Reads `gs://test-artifacts-product-first/results/v1/post-deploy/<repo>/<sha>/<cluster>/...` for results produced by `leartech-arrivals-observer` (see `arrivals-observer.md`). The arrivals-observer runs the same Playwright suite against staging-deployed versions; this quill verifies those staging tests passed before letting the gate clear.
+
+**This quill closes a real gap in pre-merge-only testing**: preview env ≠ staging, so issues that only manifest with real staging config / scale / data are missed by shift-left. The quill catches them at the staging→prod hop.
+
+```yaml
+post-deploy-tests:
+  blocking: false                # alert-only initially; promote to blocking after baseline period
+  description: "Required Playwright tests passed against the staging deployment of the promoted version"
+  impl: result-store-lookup
+  config:
+    result_store: gs://test-artifacts-product-first/results/v1/post-deploy/
+    tolerate_missing_window: true   # if arrivals-observer hasn't observed yet, don't fail
+```
+
+**Quill behavior**:
+
+```
+For each promoted service v_new:
+  Query result-store for results/v1/post-deploy/<service>/<sha>/...
+  If no results found:
+    if tolerate_missing_window: pass (with warning in PR comment)
+    else: fail
+  If results found:
+    All required tests passed in window? → pass
+    Otherwise → fail (newly-failed list rendered in PR comment)
+```
+
+**Phased rollout**:
+
+- **Weeks 1-6 of operation**: `blocking: false` — emits PR comment with results but does not fail the check. Tunes flake rates and forensics thresholds without disrupting releases.
+- **Weeks 6-8**: per-service flip to `blocking: true` for services where the signal is reliable (override-rate stable, forensics consistently meaningful).
+- **Steady state**: most production-critical services blocking; opt-in alert-only for less critical / flaky services.
+
+This is meaningfully more conservative than mqube's behavior (their porcupine testing quill is blocking from day one). We get the safety valve while we calibrate.
+
+**Why a separate quill from `shift-left-tests`**: distinguishing "pre-merge tests passed" (caught most things) from "post-deploy tests passed" (caught environmental + scale + cross-service issues) is operationally useful. Override audit can identify which class of failure dominates over time and inform what to invest in.
+
 ## Performance
 
 The whole gate evaluation should run in **under 30 seconds** on a typical promotion PR (10-20 services changing). Budgets:
