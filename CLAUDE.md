@@ -32,6 +32,7 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 @renovate-hardening.md
 @build-plan.md
 @sessions.md
+@session-0-brief.md
 @open-questions.md
 @diagrams.md
 

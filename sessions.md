@@ -14,19 +14,35 @@ Following the leartech "session 11/12" pattern from `~/leartech/hub/status/code-
 
 Each session aims for **3-6 hours of focused work** producing a **testable, committable deliverable**. Skip a session if its deliverable can't be defined cleanly — that's a sign the design needs another pass; update `open-questions.md` instead.
 
-### Phase 1 — closed loop (~7 sessions)
+**Strategy update 2026-05-04**: starts with a single-engineer end-to-end spike (Session 0, ~10h) to prove the architecture, then Phase 1 sessions become hardening passes rather than build-from-scratch. Foundation (deployments, CI/CD, GCS, Lighthouse, golden templates, AI infrastructure) is already in place, so the spike is cheap and the architectural payoff is real. See `session-0-brief.md` for the spike's full scope, validation criteria, and anti-scope-creep checklist.
+
+### Session 0 — End-to-end spike (~10h, single session)
+
+**Reframed strategy as of 2026-05-04**: instead of building Phase 1 sequentially over ~3 weeks, do a focused full-stack spike in one day to prove every interface end-to-end at low fidelity, then Phase 1 sessions become hardening passes. The foundation (deployments, CI/CD, GCS, Lighthouse, golden templates) is already in place, so the cost of the spike is cheap and the architectural payoff is real — integration surprises get found in week 1, not week 6.
+
+See `session-0-brief.md` for full pre-flight checklist, deliverables, validation criteria, and explicit anti-scope-creep list.
 
 | # | Goal | Deliverable | Where commits land | Est |
 |---|---|---|---|---|
-| **1.1** | Stand up `leartech-qa-management` repo | Public GH repo with CUE schemas, self-CI (schema-validate + cross-reference linter), seed entries for 3-4 sample services, Renovate-publishable | new repo: `mikelear/leartech-qa-management` | 4-5h |
-| **1.2** | Extend result-store path schema | `end2end-ui` task uploads `results.json` to SHA-keyed `gs://test-artifacts-product-first/results/v1/...`; verified on a real PR | `leartech-pipeline-catalog` | 2-3h |
-| **1.3** | `leartech-gate` skeleton + first quill | Go service from golden template; helmfile parse via beaver lib; GCS result-store client; **shift-left-tests quill** end-to-end against synthetic helmfile + results | new repo: `mikelear/leartech-gate` | 4-6h |
-| **1.4** | Two more quills + Tekton wrapper | `contract-tests` + `co-promotion` quills; pipeline-catalog `uses:` task; GitHub PR comment + check status post | `leartech-gate` + `leartech-pipeline-catalog` | 4-5h |
-| **1.5** | First-real-world wiring | Lighthouse trigger + branch-protection on a target GitOps repo (probably the dev cluster's first); green check on a real PR; synthetic failure properly blocks | a GitOps repo (TBD which first — `jx-staging-files` likely) | 3-4h |
-| **1.6** | `repo-type.yaml` bulk seed | AI-suggested classification PR per active repo; CODEOWNERS confirm; 100% coverage of active repos | many repos (one PR each) | 4-5h spread across ~3 sessions if needed |
-| **1.7** | Phase 1 retrospective | Validation criteria checked; `~/leartech/hub/shared-rules/platform-leverage.md` started with patterns landed; Phase 2 estimates recalibrated from actuals | hub | 1-2h |
+| **0** | End-to-end spike — prove the architecture works | One demo flow: PR on auth-ui → shift-left tests → results.json in GCS → synthetic promotion PR → leartech-gate fires → green/red check → /override works. ALL components in skeletal form. | new repos: `mikelear/leartech-qa-management`, `mikelear/leartech-gate` + extension to `leartech-pipeline-catalog` + sandbox helmfile repo | ~10h |
 
-**Phase 1 total**: ~22-30 hours of focused work; calendar-wise ~2-3 weeks single-threaded, ~1.5 weeks with parallelization.
+### Phase 1 — harden the spike (~6 short sessions, ~1-2h each)
+
+After Session 0, Phase 1 sessions are hardening passes on top of the spike, not build-from-scratch. Each session has clearer scope because the architecture has been exercised under real conditions.
+
+| # | Goal | Deliverable | Where commits land | Est |
+|---|---|---|---|---|
+| **1.1** | Harden `leartech-qa-management` | Add CUE schemas; cross-reference linter (`make validate`); self-CI Lighthouse trigger; auto-merge policy for additions-only PRs; expand `required-tests/` to 3-4 services | `leartech-qa-management` | 2-3h |
+| **1.2** | Extend result-store path to other test packs | Spike covered Playwright UI only. Add same SHA-keyed upload to other test packs — contract, integration, unit (per repo type) | `leartech-pipeline-catalog` | 1-2h |
+| **1.3** | Second quill: contract-tests | Extract data-driven quill framework from spike's hardcoded shift-left-tests; add `contract-tests` quill following same impl pattern; `gate-metadata/quills.yaml` becomes the source of truth | `leartech-gate` + `leartech-qa-management` | 2-3h |
+| **1.4** | Third quill: co-promotion | Pure helmfile diff check (no result-store query). Validates that linked services promote together. Different `impl` type than result-store-lookup → proves the framework handles multiple impl types. | `leartech-gate` | 1-2h |
+| **1.5** | Wire to real GitOps repos | Spike used a sandbox. Now wire `leartech-gate` Lighthouse trigger to actual production GitOps repos (per cluster). Branch-protection rule. Multi-cluster (gcp + az) result-store query. | GitOps repos + `leartech-gate` | 2-3h |
+| **1.6** | `repo-type.yaml` bulk seed | AI-suggested classification PR per active repo; CODEOWNERS confirm; 100% coverage. Spike covered auth-ui only. | many repos (one PR each) | 3-4h spread across ~2 sessions if needed |
+| **1.7** | Phase 1 retrospective | Validation criteria checked (now post-hardening); `~/leartech/hub/shared-rules/platform-leverage.md` started with patterns landed; Phase 2 estimates recalibrated from actuals | hub | 1-2h |
+
+**Phase 1 total** (post-spike): ~12-19 hours of focused hardening work; calendar ~1-1.5 weeks single-threaded, ~1 week with parallelization.
+
+**Phase 1 + Session 0 total**: ~22-29 hours combined; calendar ~1.5-2 weeks single-threaded.
 
 ### Phase 2 — enrichment (~7 sessions)
 
@@ -93,23 +109,33 @@ The bottleneck isn't Claude session count; it's **the contracts between sessions
 
 **The rule**: commit the contract first, then fan out.
 
-### Phase 1 dependency graph
+### Session 0 — single session, no parallelism
+
+The spike is single-engineer, single-thread by design. The integration value comes from one mind holding the whole flow at once. Don't try to parallelize.
+
+### Phase 1 dependency graph (post-spike)
+
+The spike has already settled the load-bearing contracts (GCS path schema, qa-management YAML structure, gate framework, helmfile parse semantics). Phase 1 hardening can fan out widely:
 
 ```
-1.1 (qa-management schemas) ─┬─► 1.3 (gate uses schemas) ─► 1.4 ─► 1.5 ─► 1.7
-                             ├─► 1.2 (result-store extends path)
-                             └─► 1.6 (repo-type.yaml seed)
+1.1 (CUE schemas + linter on qa-management) ─┐
+1.2 (result-store path → other test packs)   ├─► 1.5 (real GitOps wiring) ─► 1.7
+1.3 (second quill: contract-tests)            │
+1.4 (third quill: co-promotion)               │
+1.6 (repo-type.yaml bulk seed) ───────────────┘
 ```
 
-Once 1.1 commits the CUE schemas + path conventions (probably half a day in), three streams can fan out:
+**All five hardening sessions (1.1, 1.2, 1.3, 1.4, 1.6) are independent of each other** because the spike already proved the framework. They can run as 4 parallel streams; 1.5 + 1.7 converge after.
 
 | Stream | Sessions | Why parallel |
 |---|---|---|
-| A | 1.1 → 1.3 → 1.4 → 1.5 → 1.7 | The gate is the critical path |
-| B | 1.2 (result-store extension in pipeline-catalog) | Different repo, settled contract |
-| C | 1.6 (bulk repo-type.yaml seed) | Different repos, settled schema |
+| A | 1.1 (qa-management hardening: CUE + linter + auto-merge) | Different repo |
+| B | 1.2 (result-store path → other test packs) | Different repo (pipeline-catalog) |
+| C | 1.3 → 1.4 (more quills in gate) | Different repo (leartech-gate) |
+| D | 1.6 (repo-type.yaml bulk seed) | Different repos (per-service PRs) |
+| All converge | 1.5 (real GitOps wiring) → 1.7 (retro) | Needs all hardening complete to gate real promotions |
 
-**Parallel saving**: ~3-4 days off Phase 1 with two engineers; ~5 days with three.
+**Parallel saving**: with 2 engineers, ~3 days off Phase 1 hardening. With 3, ~5 days. Bigger benefit than the original sequential plan because the contracts are settled.
 
 ### Phase 2 dependency graph
 
@@ -237,23 +263,29 @@ Five things matter more than session count:
 - **Cross-cutting refactors** — when extracting to `leartech-go-common`, one session at a time on the shared lib.
 - **The retrospective** — bring streams together, don't fan out the analysis.
 
-### Realistic calendar with parallelism
+### Realistic calendar with parallelism (post-spike)
 
 ```
-Week 1
-  Stream A: 1.1 (schemas, day 1) → 1.3 → 1.4
-  Stream B: (waits for 1.1) → 1.2
-  Stream C: (waits for 1.1) → 1.6 (started; 30 PRs takes ~3 days elapsed)
+Day 1 (one engineer, single-thread)
+  Session 0 — end-to-end spike (~10h focused)
+  Outcome: every interface exercised end-to-end at low fidelity
+           hardening backlog written based on what felt fragile
+
+Week 1 (post-spike, parallel hardening)
+  Stream A: 1.1 (qa-management CUE + linter + auto-merge)
+  Stream B: 1.2 (result-store path → other test packs)
+  Stream C: 1.3 → 1.4 (more quills, framework extraction)
+  Stream D: 1.6 (repo-type.yaml bulk seed; ~3 days elapsed)
 
 Week 2
-  Stream A: 1.5 → 1.7 (retro, brings everyone in)
-  Stream C: continues 1.6 to completion
+  Stream A converges: 1.5 (real GitOps wiring, multi-cluster)
+                       → 1.7 (retro)
 
 Week 3
-  Stream A: 2.1 → 2.2 → 2.3
-  Stream B: 2.4
-  Stream C: 2.5
-  Stream D: 2.6 (small, finishes mid-week)
+  Stream A: 2.1 → 2.2 → 2.3 (HAR + load testing)
+  Stream B: 2.4 (tempo-to-har)
+  Stream C: 2.5 (AI coverage scanner)
+  Stream D: 2.6 (Renovate hardening, small)
 
 Week 4
   All streams converge → 2.7 retro
@@ -268,9 +300,18 @@ Week 6
   Stream A: 2.5.5 (gate integration)
   Stream B: 2.5.6 (AI reviewer integration)
   Convergence → 2.5.7 retro
+
+Week 7
+  Stream A: 2.7.1 (arrivals-observer skeleton)
+  Stream B: 2.7.2 (test trigger via end2end-ui)
+  Stream C: 2.7.3 (forensics engine)
+
+Week 8
+  Stream A: 2.7.4 → 2.7.5 (Slack + post-deploy quill)
+  Convergence → 2.7.6 retro
 ```
 
-That's **~6 weeks of calendar time vs ~7 single-threaded** with two engineers; **~5 weeks** with three at peak Phase 2 / 2.5 fan-out.
+That's **~8 weeks elapsed with two engineers including spike + Phase 1/2/2.5/2.7**; **~6.5 weeks with three engineers** at peak fan-out. Spike is single-thread; everything after fans out aggressively because contracts are settled.
 
 The bottleneck switches from "engineering capacity" to "human triage capacity" pretty quickly. Two parallel sessions is sustainable; four is intense; six is unsustainable.
 
@@ -280,17 +321,23 @@ The bottleneck switches from "engineering capacity" to "human triage capacity" p
 
 Updated as sessions complete. Format: one row per session, with a one-line note on what landed. Sessions in flight tagged `🚧`; completed `✅`; blocked `⛔`.
 
-### Phase 1
+### Session 0 (spike)
 
 | # | Status | Note | Commit / PR |
 |---|---|---|---|
-| 1.1 | ⏳ | not started | — |
-| 1.2 | ⏳ | not started | — |
-| 1.3 | ⏳ | not started | — |
-| 1.4 | ⏳ | not started | — |
-| 1.5 | ⏳ | not started | — |
-| 1.6 | ⏳ | not started | — |
-| 1.7 | ⏳ | not started | — |
+| 0 | ⏳ | not started — scheduled tomorrow (2026-05-05). See `session-0-brief.md` for pre-flight + deliverables + anti-scope-creep | — |
+
+### Phase 1 (post-spike hardening)
+
+| # | Status | Note | Commit / PR |
+|---|---|---|---|
+| 1.1 | ⏳ | hardening — CUE schemas + linter + auto-merge on qa-management | — |
+| 1.2 | ⏳ | hardening — extend result-store path to other test packs | — |
+| 1.3 | ⏳ | hardening — second quill (contract-tests); extract framework | — |
+| 1.4 | ⏳ | hardening — third quill (co-promotion); proves framework handles multiple impls | — |
+| 1.5 | ⏳ | hardening — wire to real GitOps repos (was sandbox in spike); multi-cluster | — |
+| 1.6 | ⏳ | hardening — bulk repo-type.yaml seed (was just auth-ui in spike) | — |
+| 1.7 | ⏳ | retro + Phase 2 estimate recalibration + platform-leverage register seed | — |
 
 ### Phase 2
 
