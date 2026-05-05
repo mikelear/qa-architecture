@@ -34,6 +34,9 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 @build-plan.md
 @sessions.md
 @session-0-brief.md
+@session-0-lessons.md
+@session-0c-brief.md
+@session-2-4-brief.md
 @open-questions.md
 @diagrams.md
 
