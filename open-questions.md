@@ -245,6 +245,22 @@ Defer to Phase 3 design pass. Initial outline:
 
 **Decision needed**: confirm + format for the regression-log entries.
 
+### Q-AO7. `automated-agent` lesson-status `candidate` (or equivalent) support
+
+`LessonCaptureNotifier` (Phase 2.7) writes auto-captured lessons with `status: candidate` so they don't pollute the active calibration queue until a human triages. This requires `~/leartech/automated-agent/gate/agent/lessons/` schema to support a non-active status.
+
+**What's needed**: confirm whether the current schema supports `candidate` (or equivalent name like `pending_review`); if not, a small extension on the agent side before Phase 2.7 ships LessonCaptureNotifier.
+
+**Decision needed**: coordinate with automated-agent owner; preferred name; whether the existing CLI accepts `--status candidate` or needs flag support added.
+
+### Q-AO8. Filter for `automated_agents.github_handles` allowlist
+
+The Notifier framework filters lesson-capture transport on `author.is_automated_agent: true`, which matches against an allowlist in `notification-config.yaml`. This needs the actual GitHub handles the agent uses for its commits.
+
+**What's needed**: confirm the canonical GitHub handle(s) used by the automated-agent for PR commits (e.g. `automated-agent-bot`, `leartech-bot`, etc.). Multiple handles supported.
+
+**Decision needed**: source of truth for the allowlist (qa-management's notification-config.yaml or somewhere the agent owns and we reference).
+
 ### Q-AO6. Production-coverage policy if/when expanding
 
 When extending arrivals-observer to production: which test packs run vs which are staging-only? Some Playwright tests are inherently staging (test-data assumptions, broker/admin flows that mutate state) and unsafe in prod.

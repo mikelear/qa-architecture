@@ -29,6 +29,7 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 @har-pipeline.md
 @risk-assessor.md
 @arrivals-observer.md
+@notifications.md
 @renovate-hardening.md
 @build-plan.md
 @sessions.md
@@ -42,6 +43,16 @@ Your job is to either (a) advance the design (write or refine these docs), (b) a
 - `~/leartech/Qa-Analysis/findings/01-automated-qa-service.md` — the test runner we're adapting
 - `~/leartech/Qa-Analysis/findings/03-release-gate.md` — what mqube actually does (corrected, third version)
 - `~/leartech/hub/shared-rules/golden-service-standard.md` — leartech observability stack already in place
+- `~/leartech/automated-agent/` — separate workspace; auto-PR system. Phase 2.7's arrivals-observer integrates via `LessonCaptureNotifier` (see `notifications.md`).
+
+## Cross-system integration: `~/leartech/automated-agent/`
+
+When QA-analysis findings should propagate to the automated-agent's calibration system:
+
+- **Manual curation** (deep-dive findings): use `~/leartech/automated-agent/gate/agent/lessons/cli.py` directly with `--source-type {staging_test|prod_incident|manual_review}` and `--status open`. For sessions looking deeply at a specific issue.
+- **Auto-capture** (Phase 2.7+): `arrivals-observer` fires `LessonCaptureNotifier` (a transport in the `notify` framework — see `notifications.md`) when the suspected PR author is the configured `automated-agent-bot` identity. Auto-captured lessons land as `--status candidate` for human triage; not in the active calibration queue until promoted to `open`.
+
+Don't modify `~/leartech/automated-agent/` from this workspace — it's a separate concern. Cross-references only.
 
 ## Conventions
 

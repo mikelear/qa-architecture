@@ -130,13 +130,14 @@ Sits after Phase 2.5 because it benefits from risk-assessor's predicted-impact d
 | Result polling + newly-failed diff vs pre-merge baseline | 1 day | Platform |
 | Tempo client (extract to `leartech-go-common/tempo`) | 1 day | Platform |
 | Traffic-forensics engine (Tempo span diff: edges, rates, errors) | 3 days | Platform |
-| Slack alerter (option 2 — direct webhook initially) | 1 day | Platform |
+| **`leartech-go-common/notify` framework** — types, Router, SlackNotifier, NoopNotifier, FanoutNotifier (used by arrivals-observer + future consumers) | **1 day** | Platform |
 | Slack message rendering with forensics diff | 1 day | Platform |
+| `LessonCaptureNotifier` impl + author-filtering routing for `~/leartech/automated-agent/` integration; coordinates with agent's `status: candidate` schema | 1 day | Platform + automated-agent owner |
 | `post-deploy-tests` quill in leartech-gate (alert-only initially) | half day | Platform |
 | Helm chart, Tekton wiring, deploy to jx-staging | 1 day | Platform |
 | Documentation + runbook | 1 day | — |
 
-**Total**: ~15-16 person-days = ~3 weeks for one engineer; ~2 weeks parallelized across 2.
+**Total**: ~16-17 person-days = ~3 weeks for one engineer; ~2 weeks parallelized across 2. (Notifier framework adds ~1 day for the abstraction + ~1 day for `LessonCaptureNotifier`; in exchange we get pluggability across all future consumers and the automated-agent integration without bespoke wiring per consumer. See `notifications.md`.)
 
 ### Validation criteria
 

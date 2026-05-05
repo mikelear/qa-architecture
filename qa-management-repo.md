@@ -20,6 +20,7 @@ leartech-qa-management/
   
   service-catalog.yaml          # service ownership + dependency graph (risk-assessor input)
   risk-config.yaml              # risk-classifier thresholds and factor weights (risk-assessor input)
+  notification-config.yaml      # transports, users (multi-platform identities), routing rules — Notifier framework input
   
   load/
     <service-name>.yaml         # per-service load-test SLA configuration
@@ -183,6 +184,71 @@ trigger:
 ```
 
 **Solves**: load-test signal that's actually gateable. mqube's load-testing-results store has no SLA assertions today.
+
+### `notification-config.yaml`
+
+Drives the `leartech-go-common/notify` framework — see `notifications.md` for full design. Transports, per-user multi-platform identities, and event-routing rules. Pull-based; consumers (arrivals-observer, gate, risk-assessor) Renovate-pin to a tag.
+
+```yaml
+# leartech-qa-management/notification-config.yaml
+schema_version: v1
+
+transports:
+  slack:
+    webhook_secret_ref: slack-webhook       # K8s secret name in consumer's namespace
+    default_channel: "C0LEARTECH_RELEASES"
+  
+  lesson-capture:
+    agent_root: /var/run/leartech-automated-agent
+    default_status: candidate                # NOT `open` — humans triage to active queue
+    default_observer: arrivals-observer
+  
+  noop: {}                                  # always available; logs only
+
+users:
+  mikelear:
+    github: mikelear
+    slack: U02ABCDEF
+    teams: 28:abc-..-def
+    email: mike.lear@leartech.com
+  # ... per-user multi-platform identity dict
+
+automated_agents:
+  github_handles:                           # PR authors that are bots, not humans
+    - automated-agent-bot
+    - leartech-bot
+
+routing:
+  arrivals.regression:
+    transports: [slack]                     # always — humans see all regressions
+    fallback_tag: "@here"
+    
+    conditional_transports:
+      - when:
+          author.is_automated_agent: true   # only fire lesson-capture for agent-PRs
+        transports: [lesson-capture]
+        config:
+          source_type: ${event.tags.env_classification}   # "staging_test" or "prod_incident"
+  
+  arrivals.timeout:
+    transports: [slack]
+  
+  gate.override:
+    transports: [slack]
+    only_when: {severity: error}
+  
+  risk.high:
+    transports: []                          # silent for now; flip to [slack] if signal becomes useful
+  
+  ai-review.score-low:
+    transports: [slack]
+    only_when: {score: "<60"}
+  
+  renovate.full-qa-fail:
+    transports: [slack]
+```
+
+**Solves**: Slack lock-in, multiple consumers reinventing webhook handling, automated-agent integration noise. See `notifications.md` for the full framework.
 
 ### `gate-metadata/quills.yaml`
 

@@ -450,11 +450,14 @@ flowchart TB
         DiffOutput[(GCS forensics/v1/<br/>diff JSON<br/>new edges - rate shifts)]:::storage
     end
 
-    subgraph Alerting[Slack alerter]
-        SlackBuilder[Slack message builder<br/>with forensics rendering]:::tektonTask
-        UserMappings[(GitHub to Slack ID<br/>from qa-management)]:::storage
-        SlackAPI[Slack webhook<br/>direct POST<br/>or notification-service]:::standalone
+    subgraph Alerting[Notifications via leartech-go-common notify framework]
+        Router[notify.Router<br/>reads notification-config.yaml<br/>routes by event type]:::standalone
+        SlackImpl[SlackNotifier<br/>webhook + render]:::standalone
+        LessonImpl[LessonCaptureNotifier<br/>only when author<br/>is automated-agent]:::standalone
+        NoopImpl[NoopNotifier<br/>fallback if Slack absent]:::standalone
         SlackPost([Slack alert in channel<br/>with @-mention or @here<br/>full forensics diff]):::pr
+        AgentLesson([Lesson candidate<br/>~/leartech/automated-agent/<br/>gate/agent/lessons/<br/>status candidate]):::pr
+        UserMappings[(notification-config.yaml<br/>per-user multi-platform IDs<br/>routing rules<br/>automated_agents allowlist)]:::repo
     end
 
     subgraph GateConsumer[leartech-gate consumer Phase 2.7]
@@ -464,7 +467,6 @@ flowchart TB
     end
 
     subgraph QAMgmt4[leartech-qa-management]
-        QM_Notif[notification-config.yaml<br/>userMappings]:::repo
         QM_Forensics[forensics-config.yaml<br/>thresholds]:::repo
         QM_Quill[gate-metadata/quills.yaml<br/>post-deploy-tests entry]:::repo
         QM_RegLog[regression-log<br/>append-only]:::repo
@@ -496,13 +498,17 @@ flowchart TB
     Tempo -->|"v_old last good window"| ForensicsBin
     QM_Forensics -->|"thresholds"| ForensicsBin
     ForensicsBin --> DiffOutput
-    ForensicsBin --> SlackBuilder
+    ForensicsBin --> Router
 
-    %% Slack
-    QM_Notif -->|"userMappings"| SlackBuilder
-    SlackBuilder --> SlackAPI
-    SlackAPI --> SlackPost
-    DiffOutput -.->|"link in alert"| SlackPost
+    %% Notifications (Notifier framework)
+    UserMappings -.->|"transports + routing"| Router
+    Router --> SlackImpl
+    Router -.->|"only when author<br/>is automated-agent"| LessonImpl
+    Router -.->|"fallback if<br/>Slack disabled"| NoopImpl
+    SlackImpl --> SlackPost
+    LessonImpl --> AgentLesson
+    DiffOutput -.->|"rendered in alert<br/>+ stored as artifact"| SlackImpl
+    DiffOutput -.->|"included in lesson body"| LessonImpl
 
     %% Regression log
     Diff --> QM_RegLog
@@ -529,7 +535,9 @@ flowchart TB
 ### Notes on Diagram 4 (post-deploy)
 
 - **Lifted directly from `mqube-fat-controller`'s pattern** for the K8s watcher + dispatch + polling logic. ~60-70% code reuse possible.
-- **Traffic-forensics is new vs mqube** — they alert "test failed" without diagnostic; we render the network-behavior diff directly into the Slack alert.
+- **Traffic-forensics is new vs mqube** — they alert "test failed" without diagnostic; we render the network-behavior diff directly into both the Slack alert AND the lesson-capture body.
+- **Notifications via `notify` framework** (the Alerting subgraph) — pluggable transports decoupled from any specific platform. SlackNotifier is one impl; LessonCaptureNotifier (gates on `author.is_automated_agent: true`) feeds `~/leartech/automated-agent/` calibration; NoopNotifier is the "no Slack at all" fallback. See `notifications.md` for the full framework.
+- **Lesson capture is filtered to agent-PR regressions only** — human PR regressions fire Slack but never reach the agent calibration system. Auto-captured lessons land as `status: candidate`; humans triage to active queue. Manual capture path stays available for QA-analysis deep-dives.
 - **The calibration loop (bottom subgraph)** is the closing of the architectural circle: arrivals-observer's forensics output reveals edges risk-assessor's static analysis missed → tunes risk-config.yaml → risk-assessor improves over time. **System gets smarter via operational feedback.**
 - **Three timeframes, three observers, one data model**: risk-assessor (PR-time, predictive), gate (promotion-time, gating), arrivals-observer (post-deploy-time, regression-detective). All write to the same GCS result-store with consistent schemas.
 - **`post-deploy-tests` quill is alert-only initially** — emits PR comment but doesn't fail the gate check. Flipped to blocking per-service after 6-8 weeks of calibration.

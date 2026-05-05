@@ -370,15 +370,95 @@ Long-running Go service, `client-go` informer pattern. Lifted directly from mqub
 
 For services where ReplicaSet events aren't reliable (rare, but happens on certain workload types), a scheduled CronJob calls `TriggerArrival` for each known service. Belt-and-braces.
 
-## Slack alerter (new — first time we build one)
+## Notifications via the `notify` framework (decoupled from Slack)
 
-Mqube has `mqube-notification-service` (in-cluster) and uses it via REST. We don't have an equivalent yet.
+Earlier drafts proposed a "direct Slack webhook" alerter. That's been replaced by the **`leartech-go-common/notify` framework** — see `notifications.md` for the full design. Brief recap:
 
-Two options:
-1. **Build a small `leartech-notification-service`** (Go service, REST → Slack webhook → Slack API). Reusable for other components later (gate failures, AI review issues, etc.). ~3 days.
-2. **Direct Slack webhook from `arrivals-observer`** initially; refactor when a second consumer needs it. ~1 day.
+- `notify.Notifier` interface — one Event type, many transports
+- Built-in impls: `SlackNotifier`, `WebhookNotifier`, `LessonCaptureNotifier`, `NoopNotifier`, `FanoutNotifier`
+- Routing rules (which transports fire for which event types) live in `leartech-qa-management/notification-config.yaml`
+- Per-user identities are platform-agnostic (`{slack: U..., teams: 28:..., email: ...}`)
+- "What if leartech doesn't have Slack at all" → `NoopNotifier` or `WebhookNotifier` to whatever the team uses; arrivals-observer doesn't change
 
-Lean **option 2** for first version; refactor to option 1 when the second consumer (likely the gate's `/override` audit alerter) needs Slack access.
+Arrivals-observer becomes the framework's **first major consumer**. On regression detection, it builds an `arrivals.regression` Event and calls `router.Notify(ctx, event)`. The router consults `notification-config.yaml` to decide which transports fire. This consumer is now transport-agnostic — adding Teams, removing Slack, or fanning to multiple destinations is a config change, not a code change.
+
+### Event types arrivals-observer emits
+
+| Event type | When | Default routing |
+|---|---|---|
+| `arrivals.regression` | Newly-failing test detected vs pre-merge baseline | `[slack]` always; `[lesson-capture]` if author is automated-agent |
+| `arrivals.timeout` | 20-minute processing timeout hit | `[slack]` |
+| `arrivals.processed` | Successful arrival completion | (silent by default; opt-in via routing config if dashboards want it) |
+
+### Why the framework over a direct webhook
+
+Three reasons made the framework the right call before Phase 2.7 ships:
+
+1. **`leartech-gate`, `risk-assessor`, AI review, Renovate-hardening** all want notifications too. Building the framework once and reusing it is cheaper than each consumer wiring its own Slack webhook.
+2. **Pluggability** — leartech might move off Slack to Teams, or want PagerDuty for high-severity. With the framework, that's a routing change in qa-management; with direct webhooks, it's a multi-repo refactor.
+3. **Lesson-capture transport** — needed for the `~/leartech/automated-agent/` integration (see below). Cleanly slots in as another transport rather than a bespoke arrivals-observer code path.
+
+## Integration with `~/leartech/automated-agent/` lesson capture
+
+When `automated-agent` (the auto-PR system) opens a PR and that PR causes a post-deploy regression, the regression should flow back into the agent's lesson-calibration system so it learns to avoid the class of mistake on future runs. This is the **L4 feedback loop** the agent's lessons schema was designed for.
+
+But: not every regression is agent-relevant. Some are caused by human PRs. Some are flakes. Some are env config drift unrelated to the change. So feeding ALL regressions into the lesson system would be noise. Two safeguards:
+
+### Safeguard 1: Filter on PR author
+
+The `arrivals.regression` routing rule (in `notification-config.yaml`) fires `[slack]` always but only fires `[lesson-capture]` when `author.is_automated_agent: true`:
+
+```yaml
+arrivals.regression:
+  transports: [slack]
+  conditional_transports:
+    - when:
+        author.is_automated_agent: true     # filter on the configured agent identity
+      transports: [lesson-capture]
+```
+
+The `is_automated_agent` predicate matches against the `automated_agents.github_handles` list in qa-management — a small allowlist of bot identities (e.g. `automated-agent-bot`, `leartech-bot`).
+
+A regression caused by a human's PR fires Slack but never reaches the lesson system. A regression caused by `automated-agent-bot`'s PR fires both.
+
+### Safeguard 2: `status: candidate` not `status: open`
+
+Even within agent-PRs, not every regression is a real lesson. Some are flakes, env drift, or pre-existing bugs the agent's PR merely exposed. So `LessonCaptureNotifier` writes lessons with **`status: candidate`**, not `status: open`. A human (or designated reviewer bot) periodically triages candidates:
+
+- Promote to `status: open` → enters active calibration queue; agent learns from it
+- Discard → not a calibration signal; logged as "auto-captured, judged not relevant"
+
+The triage burden is small (probably <30 min/week — most candidates are obvious agent-mistakes or obvious flakes). Avoiding it would mean agent calibration absorbs noise.
+
+**Important**: this requires `automated-agent`'s lesson schema to support `status: candidate` (or equivalent). If it currently only supports `status: open`, a small schema extension on the agent side is needed before Phase 2.7's `LessonCaptureNotifier` ships. Tracked as Q-AO7 in `open-questions.md`.
+
+### Manual capture path stays available
+
+For QA-analysis deep-dive sessions that want curated lesson capture (rather than the auto-path):
+
+```bash
+cd ~/leartech/automated-agent
+uv run lessons capture \
+  --title "Modal flicker on Safari only — slipped past Playwright + manual review" \
+  --source-type prod_incident \
+  --source-reference INC-1234 \
+  --source-observer qa-analysis-session \
+  --category criteria_gap \
+  --status open                    # human is curating; skip the candidate step
+```
+
+Source-type mapping:
+
+| Observation | `--source-type` | Typical category |
+|---|---|---|
+| Found while testing on staging before prod promotion | `staging_test` | `criteria_gap` |
+| Bug reported post-prod via incident tracker | `prod_incident` | `criteria_gap` |
+| Manual reviewer flagged in PR comments before merge | `manual_review` | `criteria_gap` |
+| Pattern observed across multiple incidents (root cause) | `prod_incident` | `architecture` |
+
+Each lands as a frontmatter+md file in `~/leartech/automated-agent/gate/agent/lessons/catalog/`. Same schema regardless of source.
+
+The auto-path is for **breadth** (catch every agent-PR regression so nothing slips). The manual path is for **depth** (curated findings from a specific deep-dive). Both coexist; they serve different needs.
 
 ## Build estimate (with leverage)
 
