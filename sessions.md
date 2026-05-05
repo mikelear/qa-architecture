@@ -349,7 +349,7 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 | 2.2 | ⏳ | not started | — |
 | 2.3 | ⏳ | not started | — |
 | 2.4 | 🚧 | scaffolding done in spike (see Session 0/0c row above); blocked on Tempo install precursor — see Session 2.4-pre below | — |
-| 2.4-pre | ⏳ | new — install Tempo + OTel collector (or migrate to Tempo SaaS) so `tempo-to-har` has a backend to query; ~3-4h. Discovered 2026-05-05 during 2.4 validation. | — |
+| 2.4-pre | ⏳ | combined into **Platform Foundations** session (Tempo + CNPG Postgres). Brief: `session-platform-foundations-brief.md`. ~4-5h. Discovered 2026-05-05 during 2.4 validation; Postgres half added based on observed sprawl (8 GCP / 6 AZ per-namespace `auth-postgresql` StatefulSets). mqube reference: dev-only Tempo install, no shared CNPG (we're going further than mqube on Postgres). | — |
 | 2.5 | ⏳ | not started | — |
 | 2.6 | ⏳ | not started | — |
 | 2.7 | ⏳ | not started | — |
