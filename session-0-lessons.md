@@ -44,7 +44,77 @@ Status: **live during spike — entries are timestamped and sometimes terse**.
 
 ---
 
-## 2. Template clone-and-rename
+## 2. Template clone-and-rename — **golden template's README is INCOMPLETE**
+
+**Critical finding 2026-05-05**: the golden Go template's documented clone-and-rename procedure is **incomplete in two ways that break first-PR pipelines**. The automated-agent's bootstrap runbook must include both fixes; following the golden template's README literally produces a broken first-PR.
+
+### Gap 1: chart directory not renamed
+
+The README's `find ... -exec sed` only replaces file *contents*, not directory names. So `charts/leartech-go-service-template/` stays as-is even after rename.
+
+The `preview/helmfile.yaml.gotmpl` resolves the chart path as `../charts/$APP_NAME` where `$APP_NAME = <new-service-name>`. So Helm tries to install `../charts/leartech-qa-canary/` which doesn't exist, and `gcp/pr` (or `az/pr`) fails with:
+
+```
+Error: path "../charts/leartech-qa-canary" not found
+```
+
+**Fix**: in addition to the README's procedure, also:
+
+```bash
+git mv charts/leartech-go-service-template charts/<new-service-name>
+sed -i.bak "s|name: leartech-go-service-template|name: <new-service-name>|" charts/<new-service-name>/Chart.yaml
+rm -f charts/<new-service-name>/Chart.yaml.bak
+```
+
+### Gap 2: bare-name (non-fully-qualified) substitution missing
+
+The README's sed pattern is:
+
+```bash
+OLD=github.com/mikelear/leartech-go-service-template
+NEW=github.com/mikelear/<new-name>
+```
+
+This only replaces the FULL module path. Bare references to `leartech-go-service-template` (without the `github.com/mikelear/` prefix) survive — and there are many of them:
+
+- `charts/<service>/values.yaml` — `app.kubernetes.io/name: leartech-go-service-template` (becomes the K8s resource label; downstream selectors break)
+- `charts/<service>/values.schema.json` — same pattern
+- `cmd/server/main.go` — package comment + `Msg("starting leartech-go-service-template")` log line
+- `internal/handlers/example.go`, `example_test.go` — example struct names
+- `docs/swagger.yaml`, `docs/swagger.json`, `docs/docs.go` — `example: leartech-go-service-template` field
+- `.golangci.yml` — depguard rule referencing the import path
+- `README.md` + `CLAUDE.md` — docs
+
+**Fix**: extend the sed to substitute the bare name across the same file extensions:
+
+```bash
+OLD_BARE=leartech-go-service-template
+NEW_BARE=<new-service-name>
+find . -type f \( -name '*.go' -o -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.md' -o -name 'go.mod' -o -name 'Makefile' -o -name 'Dockerfile' \) \
+  -not -path './.git/*' \
+  -not -path './.angular/*' \
+  -exec sed -i.bak "s|$OLD_BARE|$NEW_BARE|g" {} \; \
+  -exec rm -f {}.bak \;
+```
+
+This is run AFTER the module-path sed, before `git init`.
+
+### Lessons
+
+1. **Golden template README is currently incomplete**. The automated-agent's runbook must override it with the corrected procedure (both gaps above). Worth raising a PR against the template's README to fix this for the next session — but until that PR lands, the agent must not trust the README literally.
+2. **Verification command** the agent should run BEFORE pushing the initial commit:
+
+   ```bash
+   # No bare references to the old name (excluding intentional source-attribution mentions if any):
+   grep -rln "leartech-go-service-template" . 2>/dev/null | grep -v "\.git/\|\.angular/" | head
+   # Empty output = clean. Non-empty = gap; investigate.
+   ```
+
+3. **`go build ./... && go test ./...`** after rename catches Go-side import path issues. Add to the agent's pre-push check.
+4. **Helm chart sanity** — `helm template ./charts/<name>` will catch chart-dir-not-found errors locally before pushing. Add to pre-push check.
+5. **The first-PR-of-a-new-repo failure modes are predictable** — if first-PR fails on `pr` step (not lint or test), the cause is almost certainly one of these two bootstrap gaps. The agent should retry with the comprehensive fixes before treating it as a real failure.
+
+## 2.5 Template clone-and-rename — original procedure (now augmented)
 
 **Pattern (from golden template README)**:
 
@@ -136,7 +206,21 @@ git push
 4. **Append at the end of the mikelear group** — multiple entries can be added in a single commit. Order doesn't matter functionally, but appending preserves git-blame for existing entries.
 5. **Description matters** — surfaces in the architect-ui dashboards + cluster docs. Match the tone of existing entries (one-liner explaining purpose). For test fixtures, explicitly say "Not for production use" so it's clear they're sandbox.
 6. **Single commit with all repos** — register all the repos in one PR/commit if they ship together. Easier to revert; clearer audit trail.
-7. **What happens after push (inferred — to be verified by spike)**: git-operator on each cluster watches the source-config.yaml. On change, it reconciles by creating `SourceRepository` CRDs + installing GitHub webhooks on each new repo. Time-to-reconcile is typically <60s but can be longer under load. Verification: `kubectl describe sourcerepo <repo-name> -n jx` on the cluster shows the CRD; first PR/push then fires Lighthouse triggers.
+7. **What happens after push (verified 2026-05-05 spike)**: git-operator on each cluster watches the source-config.yaml. On change, it reconciles by creating `SourceRepository` CRDs + installing GitHub webhooks on each new repo. **Reconcile time-to-CRD-and-webhook: <5 minutes on both clusters in this spike** (gsm + akv). Verification:
+
+   ```bash
+   # CRD exists
+   kubectl --context=gke_product-first_us-east1-b_tf-jx-usable-bird get sourcerepository -n jx | grep <repo-name>
+   kubectl --context=modern-burro get sourcerepository -n jx | grep <repo-name>
+
+   # Webhooks installed (both clusters)
+   gh api repos/mikelear/<repo-name>/hooks --jq '.[] | "\(.config.url) | \(.active)"'
+   # Expect: hook-jx.jx.leartech.com active=true + hook-jx.az.leartech.com active=true
+   ```
+
+8. **First PR fires checks on both clusters** (verified 2026-05-05 PR #1 on canary): all 9 presubmits configured in canary's triggers.yaml fired on both `gcp/` and `az/` cluster prefixes. Lighthouse Merge Status went from "Not mergeable" (before checks completed) to "In merge pool" (when checks were green-or-pending). Total checks visible at peak: ~18 (9 per cluster).
+
+9. **`end2end-ui` vs `end2end` distinction**: the **Go service template** has `end2end` (Go-style smoke). The **Angular service template** has `end2end-ui` (Playwright). When wiring a result-store extension or gate quill, **read the consumer repo's actual triggers.yaml** rather than assuming a name from the brief. The session-0-brief.md said `end2end-ui` (matching prior auth-ui examples) but the canary-from-Go-template has `end2end`. Both write to GCS the same way, but the test pack name in `required-tests/<service>.yaml` must match.
 
 ---
 
