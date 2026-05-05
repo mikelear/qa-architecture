@@ -8,14 +8,19 @@ This brief is designed to be read cold by a session starting fresh. Don't go off
 
 ## Outcome we're proving
 
+The spike uses **two new dedicated test fixtures** instead of leartech-auth-ui — own the fixture, own the failure modes, no risk to real services. Both are golden-template-derived, both are demo assets going forward.
+
+- `mikelear/leartech-qa-canary` — Go service from `leartech-go-service-template`. Real `.lighthouse` triggers, real preview env, real Playwright + contract tests. Just exists for QA system validation.
+- `mikelear/leartech-qa-sandbox-gitops` — minimal GitOps repo (helmfile + lighthouse triggers) including the canary. Promotion PRs target this; nothing real depends on it.
+
 ```
-PR opened on leartech-auth-ui (the canary service)
+PR opened on leartech-qa-canary
         ↓
 shift-left tests run (existing end2end-ui Tekton task)
         ↓
 results.json lands in GCS at SHA-keyed path  ← NEW
         ↓
-synthetic promotion PR opens against test/sandbox helmfile
+synthetic promotion PR opens against leartech-qa-sandbox-gitops
         ↓
 leartech-gate Tekton presubmit fires  ← NEW
         ↓
@@ -30,6 +35,16 @@ PR mergeable
 
 End-to-end run from PR open to gate verdict: target **<5 minutes**.
 
+The canary supports three demo modes used in validation:
+
+| Mode | What's deliberately wrong | What we expect to verify |
+|---|---|---|
+| **Happy** | Nothing — all tests green | Gate green; promotion PR mergeable |
+| **Failure** | One Playwright test asserts impossible state | Gate red with named failing test in PR comment; `/override` works |
+| **Missing results** | Manually delete results from GCS after they were uploaded | Gate red with "no results found in window" |
+
+(A fourth mode — **Network**, where the canary calls a deliberately-broken downstream — is reserved for Phase 2.7 traffic-forensics validation. Out of scope for Session 0.)
+
 ---
 
 ## Pre-flight checklist
@@ -42,8 +57,7 @@ Foundation must already be in place before starting. If any of these are missing
 - [ ] GCS bucket `gs://test-artifacts-product-first/` accessible from cluster (existing — verified by `end2end-ui` task)
 - [ ] `test-artifacts-gcs-key` Kubernetes secret in `jx` namespace (existing — verified by `end2end-ui` task)
 - [ ] Lighthouse + Tide running on at least the GCP cluster (`tf-jx-usable-bird` per multi-cluster-jx3-pattern)
-- [ ] At least one open PR on `leartech-auth-ui` to use as the canary
-- [ ] A test/sandbox GitOps repo OR a feature branch on a real one we won't merge — for the synthetic promotion PR
+- [ ] `gh repo create` permissions on `mikelear/` org (we'll create two new repos)
 - [ ] `yq eval` and `yamllint` available locally (used 2026-05-04 to catch the inline-Python trap)
 
 ---
@@ -136,22 +150,19 @@ Validate with `yq eval` + `yamllint` before pushing — the new shared rule appl
 
 Add `lint`-style trigger entry pointing at the new `qa-gate/pullrequest.yaml` source. **Use a test/sandbox helmfile repo OR a feature branch on a real GitOps repo** — do not gate real promotions on Day 1.
 
-### 6. End-to-end demo run
+### 6. Four-mode end-to-end demo
 
-Manual sequence to prove the spike:
+Three runs against the canary + sandbox, each verifying a specific behavior. See **Appendix: Concrete test commands** below for the exact commands.
 
-1. Push a small commit to an open `leartech-auth-ui` PR (matching pattern from 2026-05-04 fix verification)
-2. Wait for `end2end-ui` to complete; verify `results.json` appears at the new SHA-keyed GCS path
-3. Open a synthetic promotion PR against the sandbox helmfile repo updating auth-ui's version to that SHA
-4. Verify `leartech-gate` Lighthouse check appears on the PR
-5. Verify the check is **green** because results exist and pass
-6. Manually delete or rename the GCS results file
-7. Re-trigger the gate (push empty commit or comment `/test leartech-gate`)
-8. Verify the check is now **red**
-9. Comment `/override leartech-gate` on the PR
-10. Verify check transitions to passed; PR becomes mergeable
+**Run 1 — Happy path**: PR on canary → end2end-ui green → results.json in GCS → synthetic promotion PR → gate fires → check is GREEN → PR mergeable.
 
-If steps 1-10 work, **Session 0 is done.**
+**Run 2 — Failure path**: deliberately break a Playwright test on canary → push → end2end-ui fails → results.json shows status: Failure → new promotion PR → gate fires → check is RED with named failed test in PR comment.
+
+**Run 3 — Override path**: continuing from Run 2's PR → comment `/override leartech-gate` → check flips to passed → PR mergeable.
+
+**Run 4 — Missing-results path**: manually delete the result file from GCS → re-fire gate (empty commit on sandbox PR) → check is RED with "no results found in window".
+
+If all four runs complete with expected outcomes, **Session 0 is done.**
 
 ---
 
@@ -252,3 +263,162 @@ Each becomes ~1-2 hours of focused hardening, not 4-5 hours of build-from-scratc
 6. `~/leartech/hub/shared-rules/no-inline-python-in-tekton.md` — the trap you must not fall into
 
 That's it. Get coding.
+
+---
+
+## Appendix: Concrete test commands
+
+Copy-paste verification commands per step. Use these as definition-of-done evidence.
+
+### Pre-flight
+
+```bash
+gh auth status                                       # mikelear authenticated
+ls ~/leartech/leartech-go-service-template          # template exists
+yq --version && yamllint --version                   # both tools available
+gcloud storage ls gs://test-artifacts-product-first/ # bucket reachable
+```
+
+### After Step 1 — canary + sandbox
+
+```bash
+gh repo view mikelear/leartech-qa-canary
+gh repo view mikelear/leartech-qa-sandbox-gitops
+
+cd ~/leartech/leartech-qa-canary
+make build
+yq eval '.' .lighthouse/jenkins-x/triggers.yaml >/dev/null && echo OK
+```
+
+### After Step 2 — qa-management
+
+```bash
+gh repo view mikelear/leartech-qa-management
+
+# required-tests parses
+gh api repos/mikelear/leartech-qa-management/contents/required-tests/leartech-qa-canary.yaml \
+  --jq .content -r | base64 -d | yq eval '.' >/dev/null && echo OK
+```
+
+### After Step 3 — result-store extension
+
+```bash
+# Push empty commit on a canary PR
+git commit --allow-empty -m "test: verify result-store upload" && git push
+
+# Wait for end2end-ui to complete, then verify GCS path exists
+SHA=$(git rev-parse HEAD)
+gcloud storage ls gs://test-artifacts-product-first/results/v1/leartech-qa-canary/$SHA/gcp/playwright-ui/
+
+# Inspect content
+gcloud storage cat gs://test-artifacts-product-first/results/v1/leartech-qa-canary/$SHA/gcp/playwright-ui/01-page-loads.json | jq .
+# Expect: {schema_version: v1, status: Success, sha: <SHA>, ...}
+```
+
+### After Step 4 — leartech-gate
+
+```bash
+cd ~/leartech/leartech-gate
+go test ./internal/quills/shiftleft/...     # unit tests pass
+docker build -t leartech-gate:dev .
+docker run leartech-gate:dev --help          # shows CLI args
+```
+
+### After Step 5 — Tekton task + Lighthouse trigger
+
+```bash
+cd ~/leartech/leartech-pipeline-catalog
+yq eval '.' tasks/qa-gate/pullrequest.yaml >/dev/null && echo OK
+yamllint tasks/qa-gate/pullrequest.yaml      # clean
+
+kubectl describe sourcerepo leartech-qa-sandbox-gitops -n jx 2>&1 | grep -i webhook
+```
+
+### Step 6 — Run 1 (Happy)
+
+```bash
+# 1. Push happy-path commit on canary PR
+cd ~/leartech/leartech-qa-canary
+git commit --allow-empty -m "test: happy path" && git push
+SHA=$(git rev-parse HEAD)
+
+# 2. Wait for end2end-ui green; results.json in GCS
+~/leartech/hub/scripts/pr-pipelines.sh leartech-qa-canary <CANARY_PR>
+
+# 3. Open synthetic promotion PR against sandbox
+cd ~/leartech/leartech-qa-sandbox-gitops
+git checkout -b promote-canary-$SHA
+yq -i ".releases[] |= select(.name == \"leartech-qa-canary\") .version = \"$SHA\"" \
+  helmfiles/staging/helmfile.yaml
+git commit -am "promote: leartech-qa-canary $SHA" && git push
+gh pr create --title "promote canary $SHA" --body "spike test run 1: happy"
+
+# 4. Verify gate fires + green
+SANDBOX_PR=$(gh pr list --head promote-canary-$SHA --json number -q '.[0].number')
+gh pr checks $SANDBOX_PR | grep leartech-gate    # expect: pass
+gh pr view $SANDBOX_PR                            # expect: PR comment from gate with verdict
+```
+
+### Step 6 — Run 2 (Failure)
+
+```bash
+# 1. Break a Playwright test on canary
+cd ~/leartech/leartech-qa-canary
+# edit end2end-ui/01-page-loads.spec.ts: change `expect(true).toBe(true)` to `expect(true).toBe(false)`
+git commit -am "fail: deliberate test break" && git push
+FAIL_SHA=$(git rev-parse HEAD)
+
+# 2. Wait for end2end-ui to fail
+~/leartech/hub/scripts/pr-pipelines.sh leartech-qa-canary <CANARY_PR> | grep end2end-ui
+gcloud storage cat gs://test-artifacts-product-first/results/v1/leartech-qa-canary/$FAIL_SHA/gcp/playwright-ui/01-page-loads.json | jq .status
+# Expect: "Failure"
+
+# 3. New promotion PR for failed SHA
+cd ~/leartech/leartech-qa-sandbox-gitops
+git checkout -b promote-canary-$FAIL_SHA
+yq -i ".releases[] |= select(.name == \"leartech-qa-canary\") .version = \"$FAIL_SHA\"" \
+  helmfiles/staging/helmfile.yaml
+git commit -am "promote: leartech-qa-canary $FAIL_SHA" && git push
+gh pr create --title "promote canary $FAIL_SHA" --body "spike test run 2: failure"
+
+# 4. Verify gate fires + RED
+FAIL_SANDBOX_PR=$(gh pr list --head promote-canary-$FAIL_SHA --json number -q '.[0].number')
+gh pr checks $FAIL_SANDBOX_PR | grep leartech-gate    # expect: fail
+gh pr view $FAIL_SANDBOX_PR                            # expect: PR comment listing failed test
+```
+
+### Step 6 — Run 3 (Override)
+
+```bash
+# Continuing from Run 2's PR
+gh pr comment $FAIL_SANDBOX_PR --body "/override leartech-gate"
+sleep 10
+gh pr checks $FAIL_SANDBOX_PR | grep leartech-gate    # expect: pass (overridden)
+```
+
+### Step 6 — Run 4 (Missing-results)
+
+```bash
+# Delete result file from GCS
+gcloud storage rm gs://test-artifacts-product-first/results/v1/leartech-qa-canary/$FAIL_SHA/gcp/playwright-ui/01-page-loads.json
+
+# Re-fire gate by pushing empty commit on sandbox PR
+git checkout promote-canary-$FAIL_SHA
+git commit --allow-empty -m "retrigger gate" && git push
+
+# Verify gate fails with "results missing in window"
+sleep 60
+gh pr checks $FAIL_SANDBOX_PR | grep leartech-gate    # expect: fail
+gh pr view $FAIL_SANDBOX_PR                            # expect: comment "no results found for SHA"
+```
+
+### Cleanup after spike
+
+```bash
+# Close test PRs (don't merge anything)
+gh pr close $SANDBOX_PR        # happy
+gh pr close $FAIL_SANDBOX_PR   # failure/override/missing
+# Canary PR stays open if it's a long-lived test fixture branch
+
+# Lessons + hardening backlog → update sessions.md live-status
+```
