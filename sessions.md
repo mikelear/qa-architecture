@@ -326,8 +326,8 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 | # | Status | Note | Commit / PR |
 |---|---|---|---|
 | 0 | ✅ | **complete 2026-05-05** — full bootstrap end-to-end + four-mode demo. 4 bootstrap gaps captured + fixed (chart-dir, bare-name, Postgres-default, stale-promotion-PRs). Gate logic working locally against real GCS + qa-management. Image cluster-publish is Phase 1 hardening. See `session-0-lessons.md` for the runbook. | canary `mikelear/leartech-qa-canary@main`; sandbox `mikelear/leartech-qa-sandbox-gitops@main`; qa-management `mikelear/leartech-qa-management@main`; gate `mikelear/leartech-gate@main`; catalog `mikelear/leartech-pipeline-catalog@5029bf1` (end2end upload), `@f02de5d` (qa-gate task) |
-| 0c | ⏳ | scheduled — close cluster-side loop. Gate's release pipeline aborted on `openapi-generation` before image push. Brief: `session-0c-brief.md`. ~1.5-2h. | — |
-| 2.4 | ⏳ | scheduled (jumps Phase 1 queue) — `tempo-to-har` synthesizer. Builds the foundation HAR producer for Phase 2.2 load-testing + Phase 2.7 forensics. Brief: `session-2-4-brief.md`. ~3-4h. | — |
+| 0c | ✅ | **complete 2026-05-05** — cluster-side loop closed on GCP. `openapi-generation` removed from gate's release (CLI not API service); Dockerfile multi-binary built; `qa-gate` task pinned to GAR image with `command:` (distroless) + `CLUSTER_TAG` from cluster-config CM. Demoed happy + failure + override on sandbox PRs. AZ cluster cross-cloud GAR auth deferred to Phase 1 hardening. 2 new bootstrap gaps captured (#5 openapi-generation for non-API services; #6 multi-binary Dockerfile). | gate `mikelear/leartech-gate@abb32ef` (Dockerfile fix); catalog `mikelear/leartech-pipeline-catalog` (qa-gate task pointing at GAR); sandbox demos in PRs #1 and #2 (closed) on `mikelear/leartech-qa-sandbox-gitops` |
+| 2.4 | 🚧 | **partial 2026-05-05** — `tempo-to-har` repo bootstrapped from golden template using corrected runbook (zero residuals on first try — validates the runbook). Tempo client + OTLP→HAR converter + GCS uploader written; `/synth` CLI binary builds + ships to `us-central1-docker.pkg.dev/product-first/oci/tempo-to-har:0.0.1`. Debug Pod can pull image + run binary against in-cluster Tempo URL. **BLOCKED on live validation: Tempo backend not deployed on either cluster** — only Prometheus exists in `jx-observability`. Tempo install becomes a precursor session before tempo-to-har can produce real HARs. Bootstrap gap #7 captured: CamelCase variant (`GoServiceTemplate` → `TempoToHar`) needs sed substitution beyond kebab-case. | repo `mikelear/tempo-to-har@69b9aac`; image `tempo-to-har:0.0.1` in GAR; source-config registered in both `jx-build-cluster-{gsm,akv}` |
 
 ### Phase 1 (post-spike hardening)
 
@@ -348,7 +348,8 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 | 2.1 | ⏳ | not started | — |
 | 2.2 | ⏳ | not started | — |
 | 2.3 | ⏳ | not started | — |
-| 2.4 | ⏳ | not started | — |
+| 2.4 | 🚧 | scaffolding done in spike (see Session 0/0c row above); blocked on Tempo install precursor — see Session 2.4-pre below | — |
+| 2.4-pre | ⏳ | new — install Tempo + OTel collector (or migrate to Tempo SaaS) so `tempo-to-har` has a backend to query; ~3-4h. Discovered 2026-05-05 during 2.4 validation. | — |
 | 2.5 | ⏳ | not started | — |
 | 2.6 | ⏳ | not started | — |
 | 2.7 | ⏳ | not started | — |

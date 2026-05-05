@@ -66,7 +66,7 @@ sed -i.bak "s|name: leartech-go-service-template|name: <new-service-name>|" char
 rm -f charts/<new-service-name>/Chart.yaml.bak
 ```
 
-### Gap 2: bare-name (non-fully-qualified) substitution missing
+### Gap 2 + 7: bare-name AND CamelCase substitution missing
 
 The README's sed pattern is:
 
@@ -98,6 +98,23 @@ find . -type f \( -name '*.go' -o -name '*.yaml' -o -name '*.yml' -o -name '*.js
 ```
 
 This is run AFTER the module-path sed, before `git init`.
+
+**Gap #7 (added during Session 2.4 bootstrap of `tempo-to-har`, 2026-05-05)**: the template also has CamelCase variants — `GoServiceTemplate` in `SwaggerServiceName` constants, type names, etc. — that don't match the kebab-case substitution above. Add a third sed pass:
+
+```bash
+OLD_CAMEL=GoServiceTemplate
+NEW_CAMEL=<NewServiceCamel>   # e.g. TempoToHar
+find . -type f \( -name '*.go' -o -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.md' \) \
+  -not -path './.git/*' \
+  -exec sed -i.bak "s|$OLD_CAMEL|$NEW_CAMEL|g" {} \; \
+  -exec rm -f {}.bak \;
+```
+
+Verification (after all three sed passes):
+```bash
+grep -rln -E "leartech-go-service-template|GoServiceTemplate" . 2>/dev/null | grep -v "\.git/" | head
+# Empty output = clean.
+```
 
 ### Lessons
 
@@ -309,6 +326,107 @@ Verified across all three new repos: **<5 minutes** from source-config push to:
 - First push/PR fires Lighthouse triggers correctly
 
 Reconcile time depends on git-operator polling frequency; in practice fast enough that "wait 5 minutes" is a safe assumption. **No manual reconcile needed**.
+
+---
+
+## Pattern: debug pods over local port-forwarding
+
+**Captured 2026-05-05 during Session 2.4** — user preference, validated as a reusable pattern.
+
+**Rule**: when a service needs to talk to a cluster-internal resource (Tempo, Postgres, Redis, in-cluster mTLS APIs), prefer **debug Pods** running the actual binary in-cluster over port-forwarding + local invocation.
+
+**Why**:
+
+1. **Reuses cluster auth + networking** — no `kubectl port-forward` choreography per debug session
+2. **Same code path as production** — fewer "works locally, fails in pod" surprises
+3. **Reusable** — debug Pods become `make debug-*` targets that grow into a debug-script library over time
+4. **Multi-cluster trivial** — same `kubectl --context=<cluster>` invocation pattern for gcp + az
+5. **No cleanup** — `kubectl run --rm -i` deletes itself when done
+
+**Pattern**:
+
+Each Go service ships `debug/` Job manifests + a `Makefile` block:
+
+```makefile
+# Debug recipes — run service binary in-cluster against real dependencies.
+# Each is a one-shot Pod that exits when the operation completes.
+
+.PHONY: debug-synth-canary
+debug-synth-canary:                      ## Synth HAR for canary's last hour, dry-run
+	kubectl --context=$(CLUSTER) run tempo-to-har-debug-$$$$ \
+		--image=us-central1-docker.pkg.dev/product-first/oci/tempo-to-har:$(TAG) \
+		--rm -i --restart=Never \
+		--env="SERVICE_NAME=leartech-qa-canary" \
+		--env="WINDOW_MINUTES=60" \
+		--env="CLUSTER_TAG=$(CLUSTER)" \
+		-- synth --dry-run
+
+.PHONY: debug-synth-now
+debug-synth-now:                         ## Synth HAR for $(SERVICE) (real upload)
+	kubectl --context=$(CLUSTER) run tempo-to-har-debug-$$$$ \
+		--image=us-central1-docker.pkg.dev/product-first/oci/tempo-to-har:$(TAG) \
+		--rm -i --restart=Never \
+		--env="SERVICE_NAME=$(SERVICE)" \
+		-- synth
+```
+
+**Invocation**:
+
+```bash
+make debug-synth-canary CLUSTER=gke_product-first_us-east1-b_tf-jx-usable-bird TAG=0.0.1
+make debug-synth-now SERVICE=leartech-broker-ui CLUSTER=modern-burro TAG=0.0.1
+```
+
+**Lessons**:
+
+1. **`debug/` directory** alongside `cmd/` for service-specific Pod manifests if a debug operation needs more than `kubectl run` env-vars (e.g. mounted secrets, init-containers).
+2. **`make debug-*` targets** discoverable via `make help`. Becomes the index of "useful one-off cluster operations" without growing into ad-hoc shell scripts.
+3. **CLUSTER + TAG as Make vars** — explicit, no hidden defaults. Force the user to think about which cluster + which version they're hitting.
+4. **`--rm -i --restart=Never`** is the magic incantation: Pod exits, gets deleted, no leftover state.
+5. **Service account must allow the operations** — debug Pods inherit the namespace's default SA. If the operation needs anything beyond default RBAC, the Pod manifest in `debug/` becomes mandatory (the `kubectl run` shortcut won't suffice).
+
+**For tempo-to-har specifically**: this means we DON'T port-forward Tempo from the cluster to localhost. We run `synth` in a Pod alongside Tempo, no port-forwarding.
+
+---
+
+## Gap #5: openapi-generation task on non-API services (captured Session 0c, 2026-05-05)
+
+`leartech-gate` is a **CLI** (Tekton step), not an HTTP service — it has no `/openapi.json`, no swagger. The golden release pipeline includes `openapi-generation` which expects to find a swagger spec; on the gate's first release that step failed and aborted the whole pipeline before image push.
+
+**Fix**: remove the `openapi-generation` task entirely from `.lighthouse/jenkins-x/release.yaml` for repos where the artefact is a binary executed as a Tekton step, not a long-running HTTP service.
+
+**Heuristic for the agent's runbook**: at bootstrap time, ask "does this service expose an HTTP API to other services?" If no → strip `openapi-generation` from release pipeline. The golden template's release.yaml is HTTP-service-shaped; CLI repos need a deviation.
+
+---
+
+## Gap #6: multi-binary services need multi-`go build` Dockerfile (captured Session 0c, 2026-05-05)
+
+The golden Dockerfile builds one binary (`./cmd/server`). Two services in this spike turned out to have a second binary as the actual workload:
+
+- `leartech-gate` ships `/server` (template residue, unused) AND `/gate-cli` (the actual Tekton-invoked CLI)
+- `tempo-to-har` ships `/server` (template residue, unused) AND `/synth` (the actual CronJob-invoked CLI)
+
+If the second binary isn't built + COPY'd, the pipeline image is missing the workload — Tekton step / CronJob fails with "no such file". 
+
+**Fix**: extend Dockerfile build stage:
+
+```dockerfile
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/<binary> ./cmd/<binary>
+```
+
+…and add the matching `COPY --from=build /out/<binary> /<binary>` to the runtime stage.
+
+**For the agent's runbook**: any time you create a `cmd/<other>` directory beyond `cmd/server`, the Dockerfile must grow a parallel build + COPY pair. Verification: `docker run --rm <image> ls /` after build should show every binary you expect to ship.
+
+---
+
+## Discovered 2026-05-05: Tempo isn't installed (Session 2.4 validation blocker)
+
+`tempo-to-har` was built on the implicit assumption that Tempo is already deployed in `jx-observability`. It isn't. Only Prometheus exists there. The synth binary runs (debug Pod confirmed image pull + binary execution), but there's no trace backend to query.
+
+**Implication**: a precursor session is needed before tempo-to-har can produce real HARs from real traces. Captured as Session 2.4-pre in `sessions.md`. Until that lands, tempo-to-har is shelf-ready but not validatable.
+
+**Lesson for the agent's runbook**: when scaffolding a service that consumes data from a backing service (Tempo, Mongo, Postgres, anything not-stdlib), **add an explicit pre-bootstrap check** that the backing service exists in-cluster. The check is one `kubectl get svc -A | grep <expected>` and saves a full session of "looks done, isn't validatable". For tempo-to-har the check would have been: `kubectl get svc -A | grep -i tempo`.
 
 ---
 
