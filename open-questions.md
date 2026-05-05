@@ -253,6 +253,18 @@ Defer to Phase 3 design pass. Initial outline:
 
 **Decision needed**: coordinate with automated-agent owner; preferred name; whether the existing CLI accepts `--status candidate` or needs flag support added.
 
+### Q-CE1. Tekton CloudEvents as a signal source
+
+The webcoder work (separate workstream) is investigating switching on Tekton CloudEvents. Worth assessing whether the QA architecture should subscribe to that stream as an additional/alternative signal.
+
+**Where CloudEvents could fit**:
+
+- **Notifier framework**: Tekton emits `dev.tekton.event.pipelinerun.{started,succeeded,failed}` on PipelineRun lifecycle. These could feed a `pipeline.failed` event type into the Notifier router (Slack alert on flaky-CI patterns, lesson capture for agent-PR pipeline failures, etc.).
+- **Risk-assessor calibration**: track which PRs had which CI-time outcomes vs which post-deploy outcomes. Currently we'd reconstruct this by polling `gh pr checks`; CloudEvents would push the data in real time.
+- **Arrivals-observer (Phase 2.7)**: NOT a fit — we explicitly want to watch DEPLOYED state (K8s ReplicaSets), not pipeline state. Tekton CloudEvents tell you "the pipeline finished"; ReplicaSet events tell you "the pod is running with this version". Different signal classes.
+
+**Decision needed**: revisit when webcoder's CloudEvents pilot has data on stability + delivery semantics. If it's operational, the Notifier framework can add a `tekton-cloudevents` consumer/source. Not blocking any current phase.
+
 ### Q-AO8. Filter for `automated_agents.github_handles` allowlist
 
 The Notifier framework filters lesson-capture transport on `author.is_automated_agent: true`, which matches against an allowlist in `notification-config.yaml`. This needs the actual GitHub handles the agent uses for its commits.

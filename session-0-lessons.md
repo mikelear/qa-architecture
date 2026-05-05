@@ -312,6 +312,16 @@ Reconcile time depends on git-operator polling frequency; in practice fast enoug
 
 ---
 
+## Forward-looking signal source: Tekton CloudEvents
+
+Captured 2026-05-05. The webcoder workstream is piloting Tekton CloudEvents (PipelineRun lifecycle pushed as CloudEvents). Worth considering for the QA architecture's Notifier framework as an additional signal source — see `open-questions.md` Q-CE1 for the assessment.
+
+Key point for the agent's runbook: CloudEvents would be a **push** signal for "pipeline finished", complementing the **pull** signals (gh pr checks polling) the runbook currently uses. Not a replacement — both have their place. CloudEvents is faster + more reliable; polling is universally available even when CloudEvents infra is down.
+
+Don't bake assumptions about CloudEvents availability into the runbook yet — pilot first via webcoder, evaluate, add to QA architecture later if useful.
+
+---
+
 ## At-end-of-spike consolidation
 
 When Session 0 is complete:

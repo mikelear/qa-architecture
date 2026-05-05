@@ -325,7 +325,7 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 
 | # | Status | Note | Commit / PR |
 |---|---|---|---|
-| 0 | ⏳ | not started — scheduled tomorrow (2026-05-05). See `session-0-brief.md` for pre-flight + deliverables + anti-scope-creep | — |
+| 0 | ✅ | **complete 2026-05-05** — full bootstrap end-to-end + four-mode demo. 4 bootstrap gaps captured + fixed (chart-dir, bare-name, Postgres-default, stale-promotion-PRs). Gate logic working locally against real GCS + qa-management. Image cluster-publish is Phase 1 hardening. See `session-0-lessons.md` for the runbook. | canary `mikelear/leartech-qa-canary@main`; sandbox `mikelear/leartech-qa-sandbox-gitops@main`; qa-management `mikelear/leartech-qa-management@main`; gate `mikelear/leartech-gate@main`; catalog `mikelear/leartech-pipeline-catalog@5029bf1` (end2end upload), `@f02de5d` (qa-gate task) |
 
 ### Phase 1 (post-spike hardening)
 
