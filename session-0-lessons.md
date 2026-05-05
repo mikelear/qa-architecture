@@ -224,39 +224,91 @@ git push
 
 ---
 
-## 5. (Pending — first PR pipeline)
+## 5. First PR pipeline (captured 2026-05-05)
 
-To be captured: which checks fire on first PR; common first-run failures; how to recover from cluster-environmental issues vs code issues.
+Verified PR #1 on canary with the bootstrap fixes from item #2.
 
----
+**What runs**: 9 presubmits configured in `triggers.yaml` × 2 clusters = 18 cluster-tagged checks. All passed on the fixed SHA.
 
-## 6. (Pending — first release pipeline)
+**Typical durations** (cold first run):
+- `lint`, `govulncheck`, `test`: 2-4 min each
+- `image-scan`, `security-scan`, `ai-review`: 3-5 min each  
+- `pr` (build + scan + push + preview deploy): 8-15 min
+- `dynamic-scan` (preview-env-required): 8-12 min
+- `end2end` (preview-env-required): 5-10 min
+- Total wall-clock from PR open to all-green: ~15-20 min on first run
 
-To be captured: postsubmit triggers, image build, helmfile promotion, source-config implications.
+**Lessons**:
 
----
-
-## 7. (Pending — Lighthouse trigger registration timing)
-
-To be captured: how long after source-config push does the trigger become live; how to verify; what manual reconcile (if any) is needed.
-
----
-
-## 5. (Pending — first PR pipeline)
-
-To be captured: which checks fire on first PR; common first-run failures; how to recover from cluster-environmental issues vs code issues.
-
----
-
-## 6. (Pending — first release pipeline)
-
-To be captured: postsubmit triggers, image build, helmfile promotion, source-config implications.
+1. **Don't rely on `gh pr checks` until ~60-90s after PR open** — Lighthouse needs to render PipelineRuns; checks appear progressively. Polling earlier shows only `Lighthouse Merge Status pending`.
+2. **Both clusters fire all checks in parallel** — wide fan-out is normal; concurrent capacity is sufficient.
+3. **`Lighthouse Merge Status: In merge pool`** is the signal Tide is ready to auto-merge. **`Not mergeable. Jobs X have not succeeded.`** lists which checks are still pending or failing.
+4. **`approved` label is required for auto-merge** — added by either the Lighthouse plugin (when OWNERS approve) or the auto-promotion-bot for env-promotion PRs.
+5. **Failed `pr` step almost always means bootstrap gap** (item #2). Failed `lint`/`test`/`govulncheck` typically means real code issues. The differential helps the agent decide retry-with-fix vs surface to a human.
 
 ---
 
-## 7. (Pending — Lighthouse trigger registration timing)
+## 6. First release pipeline (captured 2026-05-05)
 
-To be captured: how long after source-config push does the trigger become live; how to verify; what manual reconcile (if any) is needed.
+Verified leartech-qa-canary PR #1 merge to main:
+
+- **Postsubmit fired immediately** on main merge (within seconds)
+- **Both clusters' release pipelines ran** (`leartech-qa-canary-main-release-*`)
+- **Total release pipeline time: ~2-3 min** per cluster (cosign-signed image build + push + jx promote)
+- **Auto-opened promotion PRs**: `mikelear/jx-build-cluster-gsm` #226 + `mikelear/jx-build-cluster-akv` #116 within ~3 minutes of merge
+- **PR title format**: `chore: promote leartech-qa-canary to version 0.0.1` — predictable, parseable
+- **PR labels**: `size/XS`, `env/staging`, `dependency/releases/<service>` — used for routing/auto-merge
+
+**GCP gsm PR #226 auto-merged within minutes** (Lighthouse `env/staging+updatebot` auto-merge rule). Helmfile updated → bootjob applied → deployment created in jx-staging.
+
+**Azure akv PR #116 stayed open** — possibly different auto-merge rules on Azure. Agent should expect manual merge may be needed on the akv side until that's diagnosed.
+
+---
+
+## 7. First staging deployment — bootstrap gap #3 + #4 (captured 2026-05-05)
+
+helmfile applied successfully on GCP, but **pods failed to start** with:
+
+```
+secret "leartech-qa-canary-db" not found
+```
+
+### Bootstrap gap #3: golden template defaults to Postgres-required
+
+Chart's `values.yaml` has `database.enabled: true` + `migrations.enabled: true` by default. Chart expects an `ExternalSecret` to sync DATABASE_URL from cluster secret backend (GSM/AKV). For a fresh service with no backend entry, this fails at deployment with the missing-secret error.
+
+**Fix for canary** (DB-less services):
+
+```yaml
+# charts/<service>/values.yaml
+database:
+  enabled: false
+migrations:
+  enabled: false
+```
+
+**Lessons**:
+
+1. **Decide DB-or-not at clone time**, before opening the first PR. Add to runbook:
+   - If service genuinely needs Postgres → provision the ExternalSecret backend entry FIRST (or accept broken first deploy and fix-forward)
+   - If DB-less → set `database.enabled: false` + `migrations.enabled: false` in `values.yaml` BEFORE the initial commit
+2. **Cluster's secret-store entry must exist** before deployment can run with `database.enabled: true`. Don't assume cluster will provision on demand.
+3. **Image-signature verification (Kyverno) failures are non-fatal at runtime** but show as PolicyViolation events. kubelet still pulls the image OK, so pod failures showing both Kyverno warnings AND CreateContainerConfigError are caused by the latter, not the former. Don't conflate.
+
+### Bootstrap gap #4: stale broken promotion PRs
+
+When deployment fails with the bad version, subsequent promotion PRs accumulate. The akv-side PR for v0.0.1 stayed open after GCP merged its broken v0.0.1. **Close stale broken promotion PRs explicitly** when fixing-forward — don't let them merge with the broken version. Agent's runbook should detect this state by checking deployment health on the cluster after promotion-PR merge; if pods unhealthy, close any stale promotion PRs that would re-deploy the broken version.
+
+---
+
+## 8. Lighthouse trigger registration timing (captured 2026-05-05)
+
+Verified across all three new repos: **<5 minutes** from source-config push to:
+- SourceRepository CRD created on both clusters
+- GitHub webhooks installed and active on both clusters
+- First push/PR fires Lighthouse triggers correctly
+
+Reconcile time depends on git-operator polling frequency; in practice fast enough that "wait 5 minutes" is a safe assumption. **No manual reconcile needed**.
 
 ---
 
