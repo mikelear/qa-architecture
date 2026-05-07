@@ -370,7 +370,7 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 
 | # | Status | Note | Commit / PR |
 |---|---|---|---|
-| 2.7.1 | ⏳ | scheduled — `leartech-arrivals-observer` repo bootstrap + K8s ReplicaSet watcher + `Arrival` CRD bundled into chart (Maestro/CNPG/Hydra-Maester pattern, not separate `*-crds` repo — see brief for why). ~4-5h. Brief: `session-2-7-1-arrivals-observer-brief.md`. | — |
+| 2.7.1 | 🚧 | **partial 2026-05-07** — `leartech-arrivals-observer` repo bootstrapped from golden template (zero residuals — runbook gap-fixes work). Arrival CRD bundled in chart at `config/qa.leartech.com_arrivals.yaml`; K8s ReplicaSet informer + idempotent CR upsert + RBAC + OTLP + health/metrics — `make pre-push` green. Registered on both clusters' source-config (PRs #254 / #134). Pending: helmfile deploy on jx-staging, validate Arrival CRs created from real ReplicaSet rollouts. | repo `mikelear/leartech-arrivals-observer@main`; gsm#254; akv#134 |
 | 2.7.2 | ⏳ | not started | — |
 | 2.7.3 | ⏳ | not started | — |
 | 2.7.4 | ⏳ | not started | — |
