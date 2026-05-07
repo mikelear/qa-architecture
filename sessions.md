@@ -370,8 +370,7 @@ Updated as sessions complete. Format: one row per session, with a one-line note 
 
 | # | Status | Note | Commit / PR |
 |---|---|---|---|
-| 2.7-pre | ⏳ | scheduled — `leartech-qa-crds` repo bootstrap. CRDs (TestRequirement, Quill, Arrival) lands cluster-side BEFORE the arrivals-observer Go service so consumers (gate, observer) reference validated schemas. Mirrors leartech-soc-crds shape — small Helm chart, no Go binary. ~2-3h. Brief: `session-qa-crds-brief.md`. | — |
-| 2.7.1 | ⏳ | leartech-arrivals-observer skeleton + K8s ReplicaSet watcher; creates Arrival CRs from Phase 2.7-pre's CRDs. Depends on 2.7-pre landing first. | — |
+| 2.7.1 | ⏳ | scheduled — `leartech-arrivals-observer` repo bootstrap + K8s ReplicaSet watcher + `Arrival` CRD bundled into chart (Maestro/CNPG/Hydra-Maester pattern, not separate `*-crds` repo — see brief for why). ~4-5h. Brief: `session-2-7-1-arrivals-observer-brief.md`. | — |
 | 2.7.2 | ⏳ | not started | — |
 | 2.7.3 | ⏳ | not started | — |
 | 2.7.4 | ⏳ | not started | — |
