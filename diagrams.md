@@ -2,6 +2,26 @@
 
 Visual reference for the leartech QA architecture. Five diagrams covering PR-time flow, promotion + gate flow, HAR pipeline, post-deploy observation + traffic forensics, and Renovate. Each rendered with consistent styling so component types are visually distinguishable.
 
+## Update 2026-05-11 — corrections after live multi-cluster validation
+
+These diagrams were last drawn 2026-05-05. After running the full flow live across both clusters this week (auth-ui + canary refreshes, real Arrival lifecycle, observed auto-close), a few inflight terminology + behavior corrections apply to **Diagram 2 (Promotion + gate flow)** specifically — the underlying mermaid is otherwise correct.
+
+1. **`jx-promote`, not `architect`.** Auto-promotion PRs on leartech are opened by `jx-promote` running inside the `release` postsubmit on the service repo (catalog-task). There is no `architect` service on leartech — that's mqube-stack vocabulary. When updating Diagram 2 next, rename any `architect` node to `release postsubmit (jx-promote)`.
+2. **Per-cluster issue isolation.** The gate's issue lifecycle (open/update/close on service repos) is cluster-aware: titles use `[leartech-gate-<cluster>]` prefixes (e.g., `[leartech-gate-az]`) and body markers `<!-- leartech-gate-blocking-issue-<cluster> -->`. One cluster's PASS verdict cannot close another cluster's still-failing issue. Worth showing as a per-cluster colored ring in the diagram if you re-render.
+3. **Bootstrap-pass exemption** is the post-deploy quill's defining branch — when no Arrival CR exists for `<svc>@<ver>`, the verdict is **PASS-through** (`v.Pass = true`) with reason "not yet deployed?". This is what allows the very-first-deploy PR to merge so the Arrival can be created. Diagram 2 should show this branch explicitly:
+   ```
+   Arrival CR exists for svc@ver?
+     ├── no  → bootstrap PASS (chicken-egg bypass; this PR creates the Arrival)
+     ├── phase=Passed   → PASS
+     ├── phase=Skipped  → PASS-through (no testPacks configured)
+     ├── phase=Failed   → BLOCK
+     └── phase=Pending  → BLOCK (still running)
+   ```
+4. **Bundled-promotion pattern** is a real path worth a side-note in Diagram 2: a `jx-promote`-opened single-service PR can be edited directly to bump *other* stale-Arrival services in the same helmfile diff, so the gate passes naturally without needing `/override`. (Verified live: `akv#165` bundled canary 0.0.5→0.0.6 + auth-ui 0.0.38→0.0.39 in one PR.)
+5. **Arrival CRs are one-shot per `<svc>-<ver>-<ns>`** — phase is recorded at first-deploy and is not re-evaluated. Recovery from a transient cluster issue (e.g., today's Postgres/CNPG cutover that fixed AZ) requires minting a new service version (empty `fix:` commit on main → new chart → new Arrival → fresh test dispatch).
+
+Diagrams 1, 3, 4, 5 remain accurate. The forensics path in Diagram 4 (post-deploy observation) is wired and dispatchable but has **never executed** yet because no Arrival has reached `phase=Failed` since the runner became operational on 2026-05-08. Worth a footnote: there's no `summary.json`-before-Tempo write yet, so from outside the cluster you can't distinguish "ran with no regressions" from "dispatch never fired".
+
 ## Legend
 
 ```mermaid

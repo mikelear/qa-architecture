@@ -16,6 +16,32 @@ Audience: anyone seeing the QA system for the first time. Read top-to-bottom; ea
 
 All ✅ in place as of 2026-05-08.
 
+## Updates since 2026-05-11 — multi-cluster end-to-end validated
+
+Today the gate ran through both clusters live, including a deliberate failure-and-recovery cycle. Captured findings that change or extend this doc:
+
+- **Per-cluster issue title isolation.** Gate-cli now emits cluster-suffixed prefixes (`[leartech-gate-az]` and `[leartech-gate-gcp]`) so one cluster's PASS verdict can't close another cluster's still-failing blocking issue. Body marker `<!-- leartech-gate-blocking-issue-<cluster> -->` matches. Empty cluster falls back to legacy unsuffixed form for migration. Source: `cmd/gate-cli/issues.go:207-223`.
+- **`CLUSTER_TAG` is hardcoded inline** in each cluster's `qa-gate.yaml` (`value: "gcp"` / `value: "az"`). The earlier `configMapKeyRef` + `optional: true` wiring silently dropped the env when `jx-cluster-config` wasn't visible in the lighthouse build namespace, which produced cluster-less `[leartech-gate]` titles. Fix in `jx-build-cluster-gsm@c5fc05ee` and `jx-build-cluster-akv@208ab81d`.
+- **Bootstrap-pass exemption confirmed in practice.** For a service-version with no Arrival CR yet, the post-deploy quill returns `Pass: true` with reason "no Arrival in jx-staging for <svc>/<ver> (not yet deployed?)". This is the chicken-and-egg bypass — the PR that creates the Arrival is the one being gated. `cmd/gate-cli/main.go:601-603`.
+- **Issue auto-close lifecycle observed.** When the gate verdict for a `service@version` flips PASS and an open issue exists with the cluster-suffixed title prefix, the gate posts a "Resolved by <PR link> — gate now reports `<svc>@<ver>` as PASS. Closing automatically." comment and closes the issue. Verified live on `leartech-qa-canary#8` (closed by `akv#165`'s gate run). Auto-close fires **per-service verdict**, not on overall gate outcome — even a partially-failing gate cleans up individual passing-service issues.
+- **Arrival CRs are one-shot, sticky-phase.** Same `service@version` keyed deterministically as `<svc>-<ver>-<ns>`; if the cluster was unhealthy when the version first deployed, the Arrival's `phase=Failed` is permanent. To re-evaluate, mint a new version. This was the trigger for today's empty-`fix:`-commit pattern on `auth-ui` and `canary` to refresh AZ Arrivals after the Postgres/CNPG cutover.
+- **Bundled-promotion pattern.** Edit a `jx-promote`-opened promo PR's branch directly to add other service bumps in the same diff (e.g., `akv#165` bumped canary 0.0.5→0.0.6 *and* auth-ui 0.0.38→0.0.39 in one PR). Both lines bootstrap-pass simultaneously → gate goes GREEN naturally → no `/override` needed. Cleaner audit trail than overriding a single-service PR.
+- **Terminology**: leartech uses **JX3 / Lighthouse / jx-gitops / jx-promote / bootjob** — there's no `architect` service (that's mqube terminology). Auto-promotion PRs are opened by `jx-promote` running in the release postsubmit.
+- **Inter-registry drift is bidirectional.** AZ ACR (`modernburro`) and GCP-AR (`product-first/oci`) routinely diverge by 3-5 versions per service when one cluster's release postsubmit is broken (e.g., today AZ ACR is missing auth-service 0.1.40-0.1.43, go-template 0.1.23-0.1.27, etc.). The chart pin in helmfile can only target versions actually pullable from that cluster's registry — so AKV catch-up to GSM main isn't always possible without first triggering missing AZ release postsubmits.
+
+### Forensics-runner observability gap (worth fixing)
+
+Forensics is **failure-triggered**: the controller only fires the runner Job when an Arrival reaches `phase=Failed`. Both clusters' Arrivals for our 2026-05-11 fresh-version deploys reached `phase=Passed`, so forensics didn't run — the GCS prefix `forensics/v1/...` is empty.
+
+From outside the cluster there's no way to distinguish:
+- "forensics ran and found no regressions" → empty diff at `forensics/v1/<svc>/<ver>/diff.json`
+- "forensics-runner crashed during Tempo query" → no diff file
+- "forensics dispatch never fired" → no Job created at all
+
+Recommended hardening: have the runner write a minimal `summary.json` *before* the Tempo query (`{status: "started", started_at: ...}`), then overwrite or append on completion. A missing file then unambiguously means "dispatch failed", which is actionable. Not yet implemented.
+
+Also: for Angular UI services (no server-side Tempo spans), forensics would write a Diff with all-zero metrics — technically correct but unhelpful. Forensics is most useful for backend services with OTLP instrumentation (auth-service, ai-classifier, etc.).
+
 ## Stage 1 — A developer opens a PR
 
 Engineer pushes a commit to a feature branch; opens PR.
@@ -334,13 +360,18 @@ gsutil cat gs://test-artifacts-product-first/forensics/v1/leartech-auth-ui/0.0.3
 
 ## What's still missing for the full "wow factor" demo
 
-| Gap | Effort | Effect |
-|---|---|---|
-| **CORS on test-artifacts bucket for trace.playwright.dev** | 10min terraform | Currently signed URLs work; without CORS, public trace viewer can't fetch. Same fix mqube uses on Azure Blob. |
-| **Gate-cli adds direct Playwright trace links** | 1h gate-cli refactor | Today gate verdict has [diff] for forensics; should also have [trace] linking to playwright-report/index.html and the per-test trace.zip |
-| **Result-store reader** (2.7.6) | 4-6h | Per-test entries in Arrival.status.tests[] (currently single pack-level entry). Better gate verdicts ("login-flow-spec failed" vs "end2end-ui Failed") |
-| **Slack alerter** (2.7.4) | 2-3h | Push notifications when an Arrival fails, with diff URL inline |
-| **Heading**: arrivals-observer-ui mirroring mqube-architect-ui | 1 week | Live dashboard. Defer until heavy use. |
+Updated 2026-05-11 — items struck through were resolved in the intervening week.
+
+| Gap | Effort | Effect | Status |
+|---|---|---|---|
+| ~~CORS on test-artifacts bucket for trace.playwright.dev~~ | 10min terraform | trace.playwright.dev now fetches signed URLs directly | **Done** |
+| ~~Gate-cli adds direct Playwright trace links~~ | 1h gate-cli refactor | Gate verdict now embeds per-failed-pack HTML report + trace listing URLs | **Done** (gate#6, 0.0.7+) |
+| ~~Result-store reader (2.7.6)~~ | 4-6h | Post-deploy quill now reads Arrival CR; verdict includes failed test names with `(Failed)` tags | **Done** |
+| **First real test failure exercises forensics-runner** | 30min (deliberate break + recover) | The empty `forensics/v1/...` GCS prefix is purely because no failure has fired since runner became operational. A controlled break on a Tempo-instrumented service (e.g., auth-service) would validate the dispatch + Tempo query + diff upload path end-to-end. | Open |
+| **`summary.json` written *before* Tempo query** | 1h forensics-runner | Distinguishes "dispatch fired but Tempo crashed" from "dispatch never fired". Currently undistinguishable from outside the cluster. | Open |
+| **Shift-left quill exercised** | 30min config + demo | Currently only `leartech-qa-canary.yaml` exists in qa-management with `required_tests: []`. Add 1-2 required_tests entries (e.g., for `auth-ui` referencing `end2end-ui` pack) to actually exercise Diagram 1's PR-time gate. | Open |
+| **Slack alerter** (2.7.4) | 2-3h | Push notifications when an Arrival fails, with diff URL inline | Open |
+| **arrivals-observer-ui mirroring mqube-architect-ui** | 1 week | Live dashboard. Defer until heavy use. | Open |
 
 ## Why this matters
 
