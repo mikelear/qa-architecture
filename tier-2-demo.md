@@ -2,7 +2,21 @@
 
 ## TL;DR
 
-All Tier-2 infrastructure is proven working end-to-end. Two demo cycles produced five distinct engineering findings — three already addressed (one mid-cycle), two carried forward as follow-up work. The rolling-update transitional artifact (the headline architectural fix this cycle) is eliminated. Per-test duration quill (Layer 1) and per-endpoint Tempo span-diff (Layer 2) both deployed + enabled cluster-wide. The cycle did not produce a final "gate verdict catches regression in PR comment" capture because (a) the promote PR for the regressed version hit a jx-verify GC churn conflict, (b) results.json baseline shifted unexpectedly after rollout-gate landed, and (c) Layer 1's AND-gate is over-conservative for high-overhead test fixtures. These are real follow-ups, not bugs in the design.
+**Tier-2 demo SUCCESS — Layer 1 caught the regression in a PR verdict comment.** Three demo cycles produced six engineering findings — four already addressed (three mid-cycle), two carried forward as Phase 3 follow-up work. The rolling-update transitional artifact (the headline architectural fix) is eliminated. Per-test duration quill (Layer 1) and per-endpoint Tempo span-diff (Layer 2) both deployed + enabled cluster-wide. The captured verdict from `gsm#347` shows Layer 1 correctly flagging `canary 0.0.26`'s smoke `765ms → 5652ms (7.4× / +4887ms)` with linked artifact URLs.
+
+## Captured verdict (the headline demo artifact)
+
+PR `mikelear/jx-build-cluster-gsm#347` (dummy demo trigger) — gate-cli sticky comment for canary entry:
+
+```
+| leartech-qa-canary | 0.0.26 | ❌ | post-deploy: Arrival.phase=Passed; layer1: 1 duration regression(s) vs 0.0.23 |
+|  |  |  | Failed: end2end/smoke: 765ms → 5652ms (7.4× / +4887ms) |
+|  |  |  | end2end artifacts: [HTML report] · [trace.zip listing] |
+```
+
+Other 18 services in the helmfile all evaluated gracefully (pass-through with explanatory reasons like "no current arrival" / "no previous arrival for baseline" / "Arrival.phase=Skipped (no testPacks)"). This validates the multi-service, mixed-state evaluation path end-to-end.
+
+Pipelinerun: `build-cluster-gsm-pr-347-qa-gate-hbrwn` — pipeline `fail` (correct: canary regression flagged), other services correctly pass-through.
 
 ## Cycle 1 — 2026-05-14, ~14:48-15:38 UTC
 
@@ -114,25 +128,24 @@ Possible causes:
 
 Worth investigation. May warrant moving the `startedAt` capture from "observer dispatched Job" to "Job pod started running" — needs observer-side handler that watches the Job's pod transitions.
 
-### Finding #6 — Layer 1 AND-gate too conservative for high-overhead test fixtures
+### Finding #6 — Layer 1 AND-gate too conservative for high-overhead test fixtures **[UPDATED in Cycle 3]**
 
-On the (pre-rollout-gate) 6821ms baseline:
+Originally raised when baseline was 6821ms (pre-rollout-gate):
 
 - `+5000ms` delta on `/api/v1/example` → smoke 6821 → ~11800 ms
 - Ratio = `11800/6821 = 1.73×` ← **below** the 3× threshold
 
-Layer 1's AND-gate (ratio ≥3× AND delta ≥500ms) was designed against small-duration test fixtures (where 60→200ms is 3.3× / +140ms = noise). On a 7-second high-overhead fixture, a 5s real regression falls **inside** the noise threshold and gets filtered.
+Layer 1's AND-gate (ratio ≥3× AND delta ≥500ms) was designed against small-duration test fixtures (where 60→200ms is 3.3× / +140ms = noise). On a 7-second high-overhead fixture, a 5s real regression falls **inside** the noise threshold.
 
-Layer 2 doesn't have this problem — endpoint-level comparison sees `0.26ms → 5000ms = 19000×` cleanly.
+**Cycle 3 update:** the rollout-gate's baseline shift (Finding #4 → smoke now 765ms, not 6821ms) **inadvertently resolved this for canary**. With 765ms baseline + 5s sleep:
+- smoke 765 → 5652ms = **7.4× ratio + 4887ms delta** → both AND-gate thresholds exceeded → **flagged cleanly**
 
-Worth fixing for Phase 3: replace AND-gate with proportional sensitivity, e.g.:
+This means the AND-gate is well-tuned for *small-baseline* fixtures (which is what canary now is post-rollout-gate). For *real production services* with multi-second smoke baselines (e.g. an auth flow that does login + redirect + assertion = 3-4s), the AND-gate may still over-filter. Worth investigating per-service threshold customisation or proportional sensitivity in Phase 3 — but no longer blocks the demo.
 
-```
-ratio_or_delta_pct_of_baseline := max(ratio, current/baseline_delta)
-flag if ratio_or_delta_pct_of_baseline ≥ 30%
-```
-
-Or split per-endpoint Layer 1 detection (drilling into per-endpoint duration_ms within a test that exposes endpoint-level timings). Today's `results.json` doesn't have per-endpoint breakdowns — that'd be a fixture + schema change.
+Phase 3 design options (deferred):
+- Per-service threshold config via qa-management (mirrors mqube's required-tests pattern but for sensitivity tuning)
+- Proportional sensitivity: `max(ratio, delta_pct_of_baseline) ≥ 30%`
+- Per-endpoint Layer 1 detection (would need `results.json` schema extension to emit per-endpoint timings within a test)
 
 ### Finding #7 — jx-verify GC churn causes promote PR conflicts (operational)
 
@@ -147,17 +160,57 @@ Mitigation options (low priority — operationally noisy but not breaking):
 - Move jx-verify GC files out of config-root (declarative regen)
 - `auto-merge` on promote PRs so they land before the next GC rotation
 
-## What this cycle proves
+## Cycle 3 — 2026-05-14, ~17:00-17:20 UTC — **option A close-out (SUCCESS)**
+
+### Goal
+
+Re-run Phase 2 with canary 0.0.25 (clean rollout-gated baseline) → canary 0.0.26 (5s sleep) so the smoke baseline is small enough for the AND-gate to trigger on the regression. Then capture the gate verdict comment.
+
+### What landed
+
+| Time (UTC) | Event |
+|---|---|
+| 17:01 | canary 0.0.26-gcp released (sleep re-injected via 507392c) |
+| 17:02 | gsm#346 (canary 0.0.26 promote) opened |
+| 17:02 | gsm#346 auto-merged (no jx-verify GC conflict this time) |
+| 17:10 | canary 0.0.26 arrival landed (Passed) — observer's rollout-gate worked: tests ran AFTER new pod was the only one serving |
+| 17:12 | forensics-runner ran (Tempo still produced empty endpoint maps — Finding #5 persistent) |
+| 17:13 | gsm#347 (dummy demo trigger) opened to provoke gate-cli evaluation |
+| 17:18 | gate-cli ran on gsm#347 — verdict comment posted |
+
+### Captured Layer 1 verdict (see TL;DR)
+
+Layer 1 cleanly detected the regression and posted the verdict-comment with artifact links. Pipelinerun `build-cluster-gsm-pr-347-qa-gate-hbrwn` exit code: fail (correct — canary's entry flagged, gate check goes red, branch protection would block the merge if this were a real promotion PR).
+
+### What Cycle 3 validates that Cycle 1+2 didn't
+
+| Component | Cycle 3 result |
+|---|---|
+| Layer 1 verdict comment renders in PR | ✅ |
+| Layer 1's AND-gate correctly fires on a real regression | ✅ (7.4× / +4887ms) |
+| Artifact URLs (HTML report + trace listing) render in verdict | ✅ |
+| Mixed-state evaluation across 19 services (some deployed, some not, some skipped) | ✅ — all 18 non-canary services pass-through gracefully with explanatory reasons |
+| gate-cli's exit code drives the GitHub check status correctly | ✅ (`gcp/qa-gate fail`) |
+| `/override leartech-gate` instructions surface in the comment | ✅ |
+
+### Finding #5 (Tempo empty endpoint maps) — PERSISTED ON 0.0.26
+
+Confirmed: `diff.json` for 0.0.26 shows zero latency_regressions, `null` for both `before /api/v1/example` and `after /api/v1/example` despite the 5s sleep clearly executing (results.json proves smoke ran). This is now confirmed-persistent across multiple arrivals post-rollout-gate. Phase 3 follow-up item #1.
+
+The verdict still shows post-deploy's forensics summary slot (no latency_regressions reported), but Layer 1's per-test signal carries the demo. This is exactly the two-layer design intent — when one layer is unavailable/unhelpful, the other still produces actionable output.
+
+## What the three cycles together prove
 
 | Component | Status |
 |---|---|
-| Observer fires forensics on Passed (PR #6) | ✅ verified in `Arrival.status.forensics.generatedAt` on canary 0.0.19/0.0.21/0.0.22/0.0.23 |
+| Observer fires forensics on Passed (PR #6) | ✅ verified in `Arrival.status.forensics.generatedAt` on canary 0.0.19/0.0.21/0.0.22/0.0.23/0.0.26 |
 | Forensics test-bounded windows (PR #6) | ✅ `before_window` + `after_window` correctly derived from CR |
 | Observer rollout-wait gate (PR #7) | ✅ deployed (observer 0.0.24); eliminated the rolling-update transitional artifact |
 | Forensics handles "no previous arrival" (first deploy) | ✅ exercised inadvertently on early arrivals |
 | diff.json upload to GCS at controller-rendered path | ✅ landing at expected `forensics/v1/gcp/jx-staging/leartech-qa-canary/<ver>/diff.json` |
 | `Arrival.status.forensics.diffUrl` patched on every arrival | ✅ |
-| Layer 1 deployed + flag-enabled | ✅ (no flag fired in this cycle — see finding #6 for why) |
+| Layer 1 deployed + flag-enabled | ✅ Cycle 3 fired correctly (7.4× regression flagged) |
+| **Layer 1 verdict-comment-in-PR with artifact links** | ✅ **Cycle 3 captured (gsm#347)** |
 | Layer 2 deployed + Tempo span-diff produces correct shape | ✅ (empty maps on 0.0.23 a separate finding — see #5) |
 | Tempo collector emits spans for traced endpoints | ✅ on 0.0.21 + 0.0.22; ❓ on 0.0.23 (see finding #5) |
 | Bearer-auth test fixture for authed surface | ✅ Phase 1 `check_auth` helper works |
