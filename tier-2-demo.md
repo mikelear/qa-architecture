@@ -271,3 +271,32 @@ The verdict still shows post-deploy's forensics summary slot (no latency_regress
 The cycle aimed to produce a gate-verdict-comment screenshot. It produced something more useful: five separately-actionable findings on the seam between observability, K8s pod lifecycle, gate threshold tuning, and updatebot ergonomics. Each finding has a clear next step. The infrastructure that the demo was validating is itself sound.
 
 The headline win — observer's rollout-wait gate eliminating rolling-update transitional artifacts — landed in production this cycle and will benefit every future arrival regardless of whether the demo cycle continues.
+
+## Phase 2 close-out — 2026-05-15 (post-cycle 3)
+
+After Tier-2 Phase 1 validated the tracer fix on canary 0.0.28 (`/api/v1/example` p95=0.19ms in `after endpoints` for the first time), Phase 2 extracted the pattern to `leartech-go-common/pkg/tracing` and propagated to all consumers.
+
+| PR | Repo | Status | What |
+|---|---|---|---|
+| #3 | `leartech-go-common` | ✅ merged | New `pkg/tracing` with 5 tests, cold-start race fixes baked into defaults |
+| #27 | `leartech-qa-canary` | ✅ merged | Local `internal/tracing` → `go-common/pkg/tracing` (validated on canary 0.0.30 — `/api/v1/example` p95=0.24ms preserved) |
+| #8 | `leartech-arrivals-observer` | ✅ merged | Same swap; observer added `leartech-go-common` as new dep |
+| #7 | `leartech-forensics-runner` | ✅ merged | Deleted unused local tracing pkg (dead code from bootstrap, never wired into main.go) |
+
+Adjacent gate-discipline shipped during the same cycle:
+
+| PR | Repo | What |
+|---|---|---|
+| #31 | `leartech-pipeline-catalog` | Delta-coverage gate v1 (PR must not drop coverage > 0.5% vs base) |
+| #32 | `leartech-pipeline-catalog` | Fresh-clone base for delta-coverage (was leaking PR's untracked files) |
+| #33 | `leartech-pipeline-catalog` | mktemp portability fix (GNU vs BSD `-t` flag) |
+| #25 | `leartech-qa-canary` | Unit tests for canary tracing (closes PR#24 coverage gap) |
+
+### Phase 3 — open work (separate sessions)
+
+- **#129**: extract tracing to `leartech-go-common/pkg/tracing` — done above
+- **#130**: `leartech-go-common` test backfill across 8 existing pkgs (auth/httptools/lock/logger/mongo/queue/redis) — mirror mqube's `pkg/testutils` pattern. Currently 0 tests; floor at 5% with explicit ratchet plan to 60%
+- **#131**: clean up 14 pre-existing lint issues in `leartech-go-common` (7 are API-breaking naming-stutter renames needing coordinated consumer updates)
+- **#132**: `leartech-go-common/pkg/auth/config.go:24` hardcoded cluster URL — semgrep flagged
+- **#133**: counter-test PR to validate delta-coverage gate's FAIL path (gate's PASS path validated on PR#3 + PR#25, but a deliberate-regression PR hasn't been engineered yet)
+- **Phase 3 tracing**: add tracing to services that have none (auth-service, auth-ui, ai-classifier, gate — all currently produce zero Tempo spans)
