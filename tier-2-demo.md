@@ -107,26 +107,43 @@ Same `01-smoke.sh` script, same 9 curl checks. The 10× drop is suspicious. Hypo
 
 If the warm-pod hypothesis is correct, the rollout-gate is also a baseline normalizer. Worth verifying with more samples + investigating before relying on the duration figure for thresholds.
 
-### Finding #5 — Tempo endpoint maps empty on 0.0.23
+### Finding #5 — Tempo endpoint maps empty on 0.0.23 **[RESOLVED 2026-05-15]**
 
-`diff.json` for 0.0.23 (post-rollout-gate) shows:
+`diff.json` for 0.0.23 (post-rollout-gate) showed both endpoint maps empty. Smoke ran successfully (results.json proved it) but `/api/v1/example` traces never appeared in Tempo within the test window.
 
-```json
-{
-  "after_window": { "start": "2026-05-14T16:42:45Z", "end": "2026-05-14T16:44:08Z" },
-  "before": {},
-  "after": {}
-}
+**Diagnosis 2026-05-15**:
+
+After bypassing forensics-runner and querying Tempo directly via TraceQL (`{name=~".*example.*"}`), the smoking gun: spans for `/api/v1/example` exist in Tempo for **external** curl probes (`9` matches in the last hour from my laptop), but **zero** matches across the 0.0.21/22/23/26/27 arrival windows. Same handler, same instrumentation.
+
+Crucially: canary pod `6vpxt` started at `17:31:23Z` — only **11 seconds** before the 0.0.27 arrival window began. Pattern:
+
+| Source | Pod age | Result |
+|---|---|---|
+| External curl on long-running pod | hours | spans appear within seconds |
+| Smoke from Job pod, freshly-deployed canary | <1 minute | zero spans (the bug) |
+| Kubelet liveness probes (constant) | always present | spans appear (these are what we'd been seeing) |
+
+**Root cause**: cold-start race between pod startup and OTel `BatchSpanProcessor` (5-second batch timeout default). `/health/*` spans always appear because kubelet probes them every 10s, keeping the batch full enough to flush. `/api/v1/example` is called ONCE during smoke; single span queued, BatchSpanProcessor 5s timer doesn't flush before the test window closes + the gate queries Tempo. Span eventually exports but lands too late.
+
+**Fix (PR `leartech-qa-canary#24`, 2026-05-15)**: two-line change to `internal/tracing/tracing.go`:
+
+A. `WithBatchTimeout(1*time.Second)` (was 5s) — shrinks the cold-start race window
+B. Pre-warm the exporter: emit + `ForceFlush` a single dummy span BEFORE the HTTP server starts accepting traffic. Forces DNS + TCP + HTTP/2 handshake + first OTLP accept during startup, not racing the first real request.
+
+**Validation (canary 0.0.28 arrival, 2026-05-15 08:51-08:52Z)**:
+
+```
+after endpoints: ['/api/v1/example', '/docs', '/health/live', '/health/ready', '/openapi.json']
+/api/v1/example p95: 0.18961ms
 ```
 
-Both endpoint maps empty. But the smoke test definitely called `/api/v1/example` (results.json proves the test ran successfully, and Phase 1 extended the fixture to include it).
+For the first time across 7 arrivals (0.0.21/22/23/26/27/28), `/api/v1/example` is present in the diff.json `after` endpoint map. The two-line fix worked.
 
-Possible causes:
-- **Window alignment off**: `startedAt` is recorded by observer when it transitions the Arrival to Testing (right after rollout-gate passes). Tests don't actually start running until the K8s Job is scheduled (30-60s later). If Tempo spans are in [Job-start, Job-end] but window is [observer-startedAt, observer-completedAt], the spans may fall outside.
-- **Tempo collector behaviour**: spans may be batched and flushed AFTER `completedAt`, especially for very short tests (765ms wall-clock).
-- **Service-name mismatch**: the OTel resource attributes on the new pod might differ from what forensics-runner queries Tempo for.
+**Phase 2 follow-up**: extract this pattern to `leartech-go-common/pkg/tracing` (today: `auth/httptools/lock/logger/mongo/queue/redis` — no `tracing`). Update `arrivals-observer/internal/tracing/tracing.go` + `forensics-runner/internal/tracing/tracing.go` to use it. Add tracing to services that lack it (`auth-service/auth-ui/ai-classifier/gate` — all currently producing zero spans in Tempo).
 
-Worth investigation. May warrant moving the `startedAt` capture from "observer dispatched Job" to "Job pod started running" — needs observer-side handler that watches the Job's pod transitions.
+**Rejected alternatives** (per research agent):
+- `SimpleSpanProcessor` — per-span synchronous export under mutex; problematic at any meaningful QPS
+- `X-Smoke-Test` header that triggers ForceFlush — couples service code to test infra; A+B was sufficient
 
 ### Finding #6 — Layer 1 AND-gate too conservative for high-overhead test fixtures **[UPDATED in Cycle 3]**
 
